@@ -66,14 +66,11 @@ ON = [
     # changed by MW-008 (E16): the search gate; it fails open (`onFailure: none`) in the edit group, so a crash of its
     # own reading never blocks a question or a write
     ("search", "search", "edit", "PreToolUse", "AskUserQuestion|Write|Edit|MultiEdit", "gate_search:check", "none"),
-    # changed by MW-006 (E6): the record of the paths a session wrote, one entry per group, after the gates that refuse
-    ("touched.edit", "commit_files", "edit", "PreToolUse", "Edit|Write|MultiEdit|NotebookEdit", "gate_commit:touch",
-     "block"),
+    # changed by MW-034 (E8): the write record `touched.edit` and `touched.shell` is gone
     # changed by MW-019 (E16): the outbox write gate: a check file's `sha256:` line must be the document's
     ("outbox_check.pre", "outbox_check.pre", "edit", "PreToolUse", EDITS, "gate_outbox:check", "block"),
     ("lock.shell", "lock", "shell", "PreToolUse", SHELL, "gate_lock:check", "block"),
-    ("touched.shell", "commit_files", "shell", "PreToolUse", SHELL, "gate_commit:touch", "block"),
-    # changed by MW-006 (E7-E23): the commit gate itself, after the recorder of its group
+    # changed by MW-006 (E7-E23): the commit gate itself, after the lock gate of its group
     ("commit_files", "commit_files", "shell", "PreToolUse", SHELL, "gate_commit:check", "block"),
     # changed by MW-009 (E14): the delete gate, after the commit gate of the shell group
     ("delete", "delete", "shell", "PreToolUse", SHELL, "gate_delete:check", "block"),

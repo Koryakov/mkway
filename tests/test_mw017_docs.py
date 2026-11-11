@@ -79,10 +79,11 @@ def test_keys_md_has_a_line_for_each_lead_key():
         assert f"default `{default}`" in rows[key][3] and "MW-017" in rows[key][4], key
 
 
+@pytest.mark.engine_repo  # MW-025: the changelog is not in an installed copy
 def test_the_version_is_0_2_0_and_the_changelog_names_the_card():
     """E21: the lead role adds commands and gates, so by the README's rule the minor number moves: `VERSION` reads
     `0.2.0` and the changelog has a `## 0.2.0` section with the line of this card, above `## 0.1.0`."""
-    assert (REPO / "VERSION").read_text(encoding="utf-8").strip() == "0.2.0"
+    assert (REPO / "VERSION").read_text(encoding="utf-8").strip() == "0.2.7"  # changed by MW-027: 0.2.7
     text = (REPO / "CHANGELOG.md").read_text(encoding="utf-8")
     assert text.index("\n## 0.2.0\n") < text.index("\n## 0.1.0\n")
     section = text.split("\n## 0.2.0\n", 1)[1].split("\n## ", 1)[0]

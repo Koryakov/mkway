@@ -224,7 +224,7 @@ def test_the_check_warns_when_the_settings_lack_the_sendmessage_entry(tmp_path):
     assert mkway(task, env, "install", "--from", str(src), "--vcs", "none").returncode == 0
     proc = mkway(task, env, "check")
     assert "message gate: the SendMessage hook entry is present" in proc.stdout, proc.stdout + proc.stderr
-    settings = task / ".claude" / "settings.local.json"
+    settings = task / ".claude" / "settings.json"
     data = json.loads(settings.read_text(encoding="utf-8"))
     data["hooks"]["PreToolUse"] = [g for g in data["hooks"]["PreToolUse"] if g.get("matcher") != "SendMessage"]
     settings.write_text(json.dumps(data), encoding="utf-8")

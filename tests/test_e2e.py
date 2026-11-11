@@ -29,7 +29,7 @@ def _install(tmp_path, vcs, engine_gates=True):
 
 
 def _entries(task):
-    data = json.loads((task / ".claude" / "settings.local.json").read_text(encoding="utf-8"))
+    data = json.loads((task / ".claude" / "settings.json").read_text(encoding="utf-8"))
     for event, groups in data["hooks"].items():
         for group in groups:
             for h in group["hooks"]:
@@ -121,11 +121,13 @@ def test_generated_files_hold_no_machine_path(tmp_path, vcs):
 
 
 def test_settings_local_is_git_ignored(tmp_path):
-    """E42: with vcs git, `.claude/settings.local.json` is git-ignored in the task root."""
+    """E42 (changed by MW-027): with vcs git, install writes no `.claude/settings.local.json` (the owner's own
+    per-machine file); the hook entries are in `.claude/settings.json`, which git does not ignore."""
     task, _env = _install(tmp_path, "git")
-    assert (task / ".claude" / "settings.local.json").is_file()
-    proc = subprocess.run(["git", "check-ignore", "-q", ".claude/settings.local.json"], cwd=str(task))
-    assert proc.returncode == 0
+    assert not (task / ".claude" / "settings.local.json").exists()
+    assert (task / ".claude" / "settings.json").is_file()
+    proc = subprocess.run(["git", "check-ignore", "-q", ".claude/settings.json"], cwd=str(task))
+    assert proc.returncode == 1
 
 
 def test_root_suite_does_not_collect_mkway(tmp_path):

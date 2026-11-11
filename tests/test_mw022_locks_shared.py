@@ -28,7 +28,9 @@ def _pair(tmp_path, *, targets=(HOLD, DOCS), linked_targets=None):
     top = tmp_path / "main"
     top.mkdir(parents=True)
     git(top, "init", "-q")
-    src = task_root(tmp_path, name="src", locks={"targets": list(targets)})
+    shared = str((top / "mkway" / "state").resolve())  # MW-026: the sharing is opt-in, the owner names the folder
+    src = task_root(tmp_path, name="src", locks={"targets": list(targets)},
+                    state={"dir": "mkway/state", "shared_dir": shared})
     (top / "mkway").mkdir()
     (top / "mkway" / "profile.json").write_bytes((src / "mkway" / "profile.json").read_bytes())
     git(top, "add", "-A")
@@ -40,13 +42,6 @@ def _pair(tmp_path, *, targets=(HOLD, DOCS), linked_targets=None):
         prof["locks"] = {"targets": list(linked_targets)}
         (linked / "mkway" / "profile.json").write_text(json.dumps(prof, indent=2), encoding="utf-8")
     return top, linked
-
-
-@pytest.fixture(autouse=True)
-def _fresh_cache():
-    profiles._SHARED.clear()
-    yield
-    profiles._SHARED.clear()
 
 
 def _edit(root, path):
@@ -197,6 +192,7 @@ def test_everything_else_stays_in_the_work_trees_own_state_folder(tmp_path):
     assert names == ["locks"]
 
 
+@pytest.mark.engine_repo  # MW-025: the README, changelog and register are not in an installed copy
 def test_the_readme_changelog_register_and_keys_name_the_card(tmp_path):
     """E9, E10: the README hold section says a hold reaches every work tree; the changelog has the card under
     `## 0.2.0`; the register has the row; KEYS.md has the marker folder line; VERSION is not changed by this card."""
@@ -210,4 +206,4 @@ def test_the_readme_changelog_register_and_keys_name_the_card(tmp_path):
     assert "| MW-022 | Locks reach every worktree |" in register
     keys = (REPO / "engine" / "KEYS.md").read_text(encoding="utf-8")
     assert "lock marker folder" in keys and "MW-022" in keys
-    assert (REPO / "VERSION").read_text(encoding="utf-8").strip() == "0.2.0"
+    assert (REPO / "VERSION").read_text(encoding="utf-8").strip() == "0.2.7"  # changed by MW-027: 0.2.7

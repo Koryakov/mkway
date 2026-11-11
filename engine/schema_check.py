@@ -2,7 +2,7 @@
 
 Supported schema words: type, required, properties, additionalProperties (bool or schema), items, minLength,
 minItems, maxItems, exclusiveMinimum (a number must be greater than it),
-enum, pattern (re.search), format ("regex": compiles; "relative-path": no drive, no leading slash, no `..` part).
+enum, pattern (re.search), format ("regex": compiles; "relative-path": no drive, no leading slash, no `..` part; "absolute-path": a drive or a leading slash, no `..` part).
 Each error is `<key path>: <problem>`; the key path uses dots for keys and [i] for list items.
 
 Usage: python engine/schema_check.py <profile.json>   (exit 0 = valid, 1 = errors)
@@ -37,6 +37,10 @@ def _format_error(fmt: str, value: str):
             re.compile(value)
         except re.error:
             return "not a valid regex"
+    elif fmt == "absolute-path":  # MW-026: a drive or a leading slash, no `..` part
+        parts = re.split(r"[/\\]", value)
+        if not (re.match(r"^[A-Za-z]:[\\/]", value) or value[:1] in ("/", "\\")) or ".." in parts:
+            return "not an absolute path"
     elif fmt == "relative-path":
         parts = re.split(r"[/\\]", value)
         if not value or _DRIVE.match(value) or value[0] in "/\\" or ".." in parts:

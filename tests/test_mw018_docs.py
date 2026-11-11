@@ -97,6 +97,7 @@ def test_the_section_names_every_command_reason_key_file_and_rule():
 
 # --- E16: register, changelog, version ---------------------------------------------------------------------------
 
+@pytest.mark.engine_repo  # MW-025: the register and the changelog are not in an installed copy
 def test_the_register_row_the_changelog_line_and_the_card_folder():
     """E18: the register has the row MW-018 «Messaging order» with its folder; the changelog lists it under
     `## 0.2.0` after MW-017; `VERSION` stays `0.2.0` (MW-017 sets it for this release); the card folder holds the card
@@ -109,7 +110,7 @@ def test_the_register_row_the_changelog_line_and_the_card_folder():
     items = [x for x in section.splitlines() if x.startswith("- ")]
     assert "- MW-017: Lead role" in items and "- MW-018: Messaging order" in items
     assert items.index("- MW-017: Lead role") < items.index("- MW-018: Messaging order")
-    assert (REPO / "VERSION").read_text(encoding="utf-8").strip() == "0.2.0"
+    assert (REPO / "VERSION").read_text(encoding="utf-8").strip() == "0.2.7"  # changed by MW-027: 0.2.7
     folder = REPO / "cards" / "MW-018-messaging-order"
     assert (folder / "CARD.md").is_file() and (folder / "CHECK.md").is_file()
     assert not (folder / "probe").exists()

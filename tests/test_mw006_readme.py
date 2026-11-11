@@ -43,15 +43,15 @@ def test_the_readme_has_one_section_commit_checks():
 def test_the_section_states_the_rules_reasons_keys_and_ways_out():
     """E25 (part 6): the section names the rules in their order, every reason id of the entries on the gate
     `commit_files` (read from the manifest), the three profile keys with every default (read from the schema and the
-    module), the switch and the message switch, the record `touched.jsonl` with `unresolved`, the always-allowed
-    files, the way out of each refusal and the limits (a script's writes are not seen; staging in the commit's own
+    module), the switch and the message switch, `take-root-busy`, the always-allowed
+    files, the way out of each refusal and the limits (staging in the commit's own
     call is refused; the ignore check is for new files; the owner's terminal is not gated).
     Catches: a section that describes a gate the engine does not have, or leaves out a refusal a session will meet."""
     import gate_commit
     flat = _flat(_section())
     manifest = json.loads((REPO / "engine" / "manifest.json").read_text(encoding="utf-8"))["entries"]
     reasons = {r for e in manifest if e["gate"] == "commit_files" for r in e["reason_ids"]}
-    assert len(reasons) == 11  # changed by MW-021 (E6): `rule-without-test`
+    assert len(reasons) == 9  # MW-021 (E6) added `rule-without-test`; MW-034 removed `ride-in-file`
     for reason in reasons:
         assert f"`{reason}`" in flat, reason
     schema = json.loads((REPO / "engine" / "profile.schema.json").read_text(encoding="utf-8"))
@@ -61,10 +61,9 @@ def test_the_section_states_the_rules_reasons_keys_and_ways_out():
         assert f"`{pattern}`" in flat, pattern
     assert f"`{gate_commit.MAX_FILE_KB}`" in flat
     for needed in ("`commit_files`", "`gates.commit_files`", "`gates.commit_files.message_card.on`",
-                   "`touched.edit`", "`touched.shell`", "`<state.dir>/touched.jsonl`", "`unresolved`",
-                   "`paths.exempt`", "`<bundle.root>/ledger/`", "`ids.card_prefix`", "`git restore --staged <file>`",
+                   "`take-root-busy`", "`paths.exempt`", "`<bundle.root>/ledger/`", "`ids.card_prefix`", "`git restore --staged <file>`",
                    "`git add -f`", "`-a`", "a call of its own", "`card resync`", "owner's own terminal",
-                   "Right files only", "Own changes only", "No junk", "No data files"):
+                   "Right files only", "One builder per task root", "No junk", "No data files"):
         assert needed in flat, needed
-    order = [flat.index(x) for x in ("Right files only", "Own changes only", "No junk", "No data files")]
+    order = [flat.index(x) for x in ("Right files only", "One builder per task root", "No junk", "No data files")]
     assert order == sorted(order)

@@ -56,6 +56,7 @@ def test_built_in_targets_refuse_edit_tool_writes(task):
         ("mkway/engine/engine/dispatch.py", "lock-closed-edit"),
         ("mkway/mkway.lock", "lock-closed-edit"),
         ("mkway/profile.json", "lock-closed-edit"),
+        (".claude/settings.json", "lock-closed-edit"),  # MW-027: the committed hook entries
         (".claude/settings.local.json", "lock-closed-edit"),
         ("mkway/.gitignore", "lock-closed-edit"),
         ("mkway/.gitattributes", "lock-closed-edit"),

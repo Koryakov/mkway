@@ -155,6 +155,24 @@ def _close_by_orderer(ctx, profile, card_id, held):
     return None
 
 
+def _open_by_lead(ctx, profile, card_id, shared):
+    """MW-028, `cards.approver: orderer`: a registered lead's `card open` of a proposed card it ordered leaves the
+    one-use permit the CLI reads; any other card (the owner's, another session's, one past `proposed`) stays the
+    owner's to open."""
+    if not card_id:
+        return None  # the CLI refuses an open with no card id
+    register.check(ctx.root, profile)
+    row = register.find(register.read(ctx.root, profile), card_id)
+    if row is None:
+        return None  # the CLI says `card-unknown`
+    problem = cardtool.open_problem(row, ctx.session_id, leads.is_lead(shared, ctx.session_id))
+    if problem:
+        return gate.refuse("owner-only-command", problem[1])
+    if not cardtool.issue_close_permit(profiles.state_dir(ctx.root, profile), card_id, ctx.session_id, kind="open"):
+        return _owner_only("card open")
+    return None
+
+
 def _call(ctx, profile, args: list):
     pos = _positional(args)
     if not pos:
@@ -209,6 +227,8 @@ def _call(ctx, profile, args: list):
     orderer = cardtool.approver(profile) == "orderer"
     if sub == "close" and orderer:
         return _close_by_orderer(ctx, profile, card_id, held)
+    if sub == "open" and orderer and "open" in moves and leads.is_lead(shared, ctx.session_id):
+        return _open_by_lead(ctx, profile, card_id, shared)  # MW-028
     if sub in ("open", "close"):
         status = "open" if sub == "open" else "closed"
         return _owner_only(f"card {sub}") if status in moves else None
@@ -234,6 +254,12 @@ def _call(ctx, profile, args: list):
         if mine and mine != card_id and _status(ctx, profile, mine) != "closed":
             return gate.refuse("session-has-card", f"this session holds {mine}, which is not closed: one card per "
                                                    f"session. Free it with `{CLI} card release {mine}` first")
+        for other_card, other in held.items():  # MW-034: one builder per task root, so one worktree and one index
+            if other != ctx.session_id and _status(ctx, profile, other_card) == "open":
+                return gate.refuse("take-root-busy", f"session {other[:8]} already holds {other_card} in this task "
+                                                     f"root: one builder per worktree and index. Wait until that "
+                                                     f"session closes or hands off {other_card}, or work in your "
+                                                     f"own worktree")
     return None
 
 
@@ -271,7 +297,8 @@ def _shell(ctx, profile, command: str):
                                                    f"(through {carrier}), so its commit cannot be checked; run the "
                                                    "commit alone, in a plain form: `git commit -m \"<message>\" -- "
                                                    "<paths>`")
-        form = helpers.git_form_problem(command, shell) if profiles.vcs(profile) == "git" else None
+        form = (helpers.git_form_problem(command, shell, profiles.git_builtins_extra(profile))
+                if profiles.vcs(profile) == "git" else None)
         if form:  # close-fix 8 (A-M2, R83): a git form the reader cannot check is refused outright
             return gate.refuse(form[0], f"{form[1]}, so its effect cannot be checked; run the plain form: `git commit "
                                         f"-m \"<message>\" -- <paths>` with exact option names")

@@ -45,9 +45,13 @@ def _version_text(root: Path, bundle: str, lock) -> str:
 
 
 def _machine_python(root: Path, profile):
-    """The interpreter install used on this machine (<state.dir>/machine.json), or None (C27)."""
+    """The interpreter install used on this machine (<state.dir>/machine.json), or None (C27). MW-027: in a worktree
+    that no install ran in, the file is missing (state is untracked) and the committed entries carry the profile's
+    `python.command`, so that is the answer then."""
     try:
         value = json.loads((profiles.state_dir(root, profile) / install.MACHINE_FILE).read_text("utf-8"))["python"]
+    except FileNotFoundError:
+        value = (profile.get("python") or {}).get("command") or "python" if isinstance(profile, dict) else None
     except (OSError, ValueError, KeyError, TypeError):
         return None
     return value if isinstance(value, str) and value.strip() else None
@@ -70,7 +74,7 @@ def drift(root: Path, profile, errors: list, manifest: list, settings=None, prof
         items.append("copy: no mkway.lock")
     elif lock.get("hash") != install.copy_hash(root / bundle / "engine"):
         items.append("copy: the copy differs from the lock")
-    settings = settings or root / ".claude" / "settings.local.json"
+    settings = settings or root / install.SETTINGS_FILE
     owned = install.live_entries(settings, bundle)
     live = _whole(owned)
     machine = _machine_python(root, profile)
@@ -336,6 +340,18 @@ def _signal_line(root: Path, p, env, session):
             f"session's owner-only command")
 
 
+def _why_vcs_none(root: Path) -> str:
+    """MW-028: one clause for the vcs line when the profile says none: the profile's word against what git says about
+    the root. Never raises."""
+    try:
+        if install.detect_vcs(root) == "git":
+            return ("the root is inside a git work tree, yet the profile says none: set \"vcs\": \"git\" in the "
+                    "profile, then run `mkway install`")
+    except Exception:
+        return "the profile says none; git could not be asked"
+    return "the profile says none and the root is in no git work tree"
+
+
 def render(root: Path, profile_file: Path, profile, errors: list, manifest: list, env=None, session=None) -> str:
     root = Path(root)
     valid = isinstance(profile, dict) and not errors
@@ -373,7 +389,7 @@ def render(root: Path, profile_file: Path, profile, errors: list, manifest: list
     if p.get("vcs") == "git":
         lines.append("vcs: git")
     elif p.get("vcs") == "none":
-        lines.append("vcs: none, every git step is off")
+        lines.append("vcs: none, every git step is off (" + _why_vcs_none(root) + ")")
     else:
         lines.append("vcs: not established (the profile does not say)")
     if errors:

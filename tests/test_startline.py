@@ -27,7 +27,7 @@ def task(tmp_path):
     (copy / "VERSION").write_text("9.9.9\n", encoding="utf-8")  # MW-016: the start block reads the copy's VERSION
     (root / "mkway" / "mkway.lock").write_text(json.dumps(
         {"version": "v9", "source_sha": None, "date": "2026-11-09", "hash": install.copy_hash(copy)}), encoding="utf-8")
-    install.write_settings(root / ".claude" / "settings.local.json", install.generate_entries(profile, MANIFEST),
+    install.write_settings(root / ".claude" / "settings.json",install.generate_entries(profile, MANIFEST),
                            "mkway")
     (root / "mkway" / "locks").mkdir()
     for name in ("one.json", "two.json"):
@@ -73,7 +73,7 @@ def test_drift_three_comparisons_one_warning(task):
     a.write_bytes(a.read_bytes() + b"#")
     assert [i.split(":")[0] for i in startline.drift(task, profile, [], MANIFEST)] == ["copy"]
     a.write_text("A = 1\n", encoding="utf-8")
-    settings = task / ".claude" / "settings.local.json"
+    settings = task / ".claude" / "settings.json"
     data = json.loads(settings.read_text("utf-8"))
     data["hooks"]["PreToolUse"][0]["hooks"][0]["timeout"] = 99
     settings.write_text(json.dumps(data), encoding="utf-8")
@@ -124,7 +124,7 @@ def test_drift_compares_whole_commands(task):
     (the hook never runs) is drift. The per-machine interpreter is read from <state.dir>/machine.json, so an entry
     made with `--python` is no drift once that file says so."""
     profile = json.loads((task / "mkway" / "profile.json").read_text("utf-8"))
-    settings = task / ".claude" / "settings.local.json"
+    settings = task / ".claude" / "settings.json"
     data = json.loads(settings.read_text("utf-8"))
     handler = data["hooks"]["SessionStart"][0]["hooks"][0]
     handler["command"] = "exit 0 || " + handler["command"]
@@ -149,7 +149,7 @@ def test_drift_machine_checks_the_interpreter(task, tmp_path):
     empty, blank or non-text value; a start-time rule looser than install's (the `py` argument forms, a flag after
     a program that is not `py`, a missing path); a version compare that refuses the (3, 9) boundary."""
     profile = json.loads((task / "mkway" / "profile.json").read_text("utf-8"))
-    settings = task / ".claude" / "settings.local.json"
+    settings = task / ".claude" / "settings.json"
     machine = task / "mkway" / "state" / "machine.json"
 
     def put(value, entries_python):
@@ -222,7 +222,7 @@ def test_start_probe_runs_last_and_has_its_own_timeout(task, tmp_path, monkeypat
     takes longer than the time limit); a probe timeout not shorter than the start entry's; a timeout that gives no
     item or loses the drift line."""
     profile = json.loads((task / "mkway" / "profile.json").read_text("utf-8"))
-    settings = task / ".claude" / "settings.local.json"
+    settings = task / ".claude" / "settings.json"
     machine = task / "mkway" / "state" / "machine.json"
     quoted = '"' + sys.executable + '"'
     ran = tmp_path / "ran.txt"
@@ -274,7 +274,7 @@ def test_drift_compares_on_failure(task):
     """E56 (R13c point 1): `onFailure` is part of the whole entry: an `edit` entry without its `"onFailure":
     "block"` is drift."""
     profile = json.loads((task / "mkway" / "profile.json").read_text("utf-8"))
-    settings = task / ".claude" / "settings.local.json"
+    settings = task / ".claude" / "settings.json"
     data = json.loads(settings.read_text("utf-8"))
     (edit,) = data["hooks"]["PreToolUse"]
     assert edit["hooks"][0]["onFailure"] == "block"

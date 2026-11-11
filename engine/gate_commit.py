@@ -1,24 +1,21 @@
-"""The commit gate (card MW-006): a session's `git commit` holds the right files, only its own changes, no junk and no
+"""The commit gate (card MW-006): a session's `git commit` holds only files inside the open card's Paths, no junk and no
 data files, and its message names the open card.
 
-Three manifest entries on one gate, `commit_files` (one profile switch, `gates.commit_files`):
-- `touched.edit` (edit group) and `touched.shell` (shell group) record the paths this session wrote, one row per path
-  in `<state.dir>/touched.jsonl`; they refuse nothing;
-- `commit_files` (shell group) reads each `git commit` of a shell command and refuses it, naming the way out.
+One manifest entry, `commit_files` (shell group; one profile switch, `gates.commit_files`): it reads each `git commit`
+of a shell command, judges the files the commit takes (the staged list always, and the files a `--`, `-a` or `-i`
+form adds) and refuses it, naming the way out. MW-034: there is no record of who wrote a file; a ride-in is stopped by
+the card's Paths and by one builder per task root (`take-root-busy`, the lock gate).
 
 The junk patterns, the data patterns and the size limit are profile keys with defaults (`settings`); no task name and
 no natural-language word is in this file. The owner's terminal runs no hook, so it is not gated.
 """
 from __future__ import annotations
 
-import json
 import re
-from pathlib import Path
 
 import cardtool
 import gate
 import helpers
-import logs
 import profiles
 import register
 import rules
@@ -29,11 +26,7 @@ SHOWN = 8  # files named in one refusal; the rest are counted
 READ_ONLY_GIT = {"commit", "status", "diff", "log", "show", "rev-parse", "ls-files", "ls-tree", "cat-file",
                  "check-ignore", "rev-list", "describe", "grep", "shortlog", "blame", "show-ref", "name-rev",
                  "diff-tree", "diff-index", "diff-files", "version", "help"}
-TOUCHED = "touched.jsonl"
-EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 SHELL_TOOLS = ("Bash", "PowerShell")
-PATH_KEYS = ("file_path", "notebook_path", "path")
-_UNREADABLE = re.compile(r"[$`%(){}]")  # a variable or a substitution: the path is not a literal (as the lock gate)
 JUNK = ["__pycache__/", "*.pyc", ".pytest_cache/", ".pytest_tmp/", "*.log", "*.tmp", "*.orig", "*.rej", ".DS_Store",
         "Thumbs.db"]
 DATA = ["*.csv", "*.tsv", "*.xlsx", "*.xls", "*.parquet", "*.db", "*.sqlite", "*.sqlite3", "*.bak", "*.dump"]
@@ -65,78 +58,11 @@ def settings(profile) -> dict:
             "max_file_kb": _limit(raw.get("max_file_kb")) or MAX_FILE_KB}
 
 
-# ---- the record of the paths a session wrote ------------------------------------------------------------------------
-
-def _written(ctx) -> tuple:
-    """(repo paths, unresolved) this call writes: an edit tool's path, or what `shell_writes` reads of a command. A
-    write whose target cannot be read (a variable, `eval`, a computed path) is `unresolved`."""
-    tool_input = ctx.tool_input if isinstance(ctx.tool_input, dict) else {}
-    found, unresolved = [], False
-    if ctx.tool_name in SHELL_TOOLS:
-        command = tool_input.get("command")
-        writes = ctx.shell_writes(command if isinstance(command, str) else "")
-        unresolved = bool(writes.everywhere)
-        raw = list(writes.paths)
-    else:
-        raw = [v for k in PATH_KEYS if isinstance(v := tool_input.get(k), str) and v]
-    for path in raw:
-        if _UNREADABLE.search(path):
-            unresolved = True
-            continue
-        rel = ctx.norm(path)
-        if rel and rel != "." and rel not in found:
-            found.append(rel)
-    return found, unresolved
-
-
-def touch(event, ctx):
-    """The recorder (entries `touched.edit` and `touched.shell`): one row per path this call writes, in
-    `<state.dir>/touched.jsonl`, and one `unresolved` row when a shell write cannot be read. It refuses nothing; when
-    the row cannot be written it warns `touch-record-failed`, and the commit gate then refuses a file it cannot show
-    this session wrote."""
-    try:
-        paths, unresolved = _written(ctx)
-        store = profiles.state_dir(ctx.root, ctx.profile) / TOUCHED
-        time = logs.now().isoformat(timespec="milliseconds")
-        for path in paths:
-            logs.append_jsonl(store, {"session_id": ctx.session_id, "path": path, "via": ctx.tool_name, "time": time})
-        if unresolved:
-            logs.append_jsonl(store, {"session_id": ctx.session_id, "path": None, "via": ctx.tool_name,
-                                      "unresolved": True, "time": time})
-    except Exception as exc:  # fail closed later: a missing row makes the commit gate refuse, never allow
-        return gate.warn("touch-record-failed", f"the record of what this session wrote could not be written "
-                                                f"({exc.__class__.__name__}); a commit of this call's file will be "
-                                                f"refused as not yours until it is written again")
-    return gate.allow()
-
-
-def touched(state_dir, session) -> tuple:
-    """(paths, unresolved) the session recorded: repo paths (or globs) in the order written, and whether a shell
-    write it made could not be read."""
-    paths, unresolved = [], False
-    try:
-        lines = (Path(state_dir) / TOUCHED).read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return paths, unresolved
-    for line in lines:
-        try:
-            row = json.loads(line)
-        except ValueError:
-            continue
-        if not isinstance(row, dict) or row.get("session_id") != session:
-            continue
-        if row.get("unresolved") is True:
-            unresolved = True
-        elif isinstance(row.get("path"), str) and row["path"] not in paths:
-            paths.append(row["path"])
-    return paths, unresolved
-
-
 # ---- the commit gate ------------------------------------------------------------------------------------------------
 
 def check(event, ctx):
     """The commit gate (entry `commit_files`): refuses a `git commit` of a shell command that holds a file outside
-    the open card's Paths (`file-not-in-card`) or a file this session never wrote (`ride-in-file`), and fails closed
+    the open card's Paths (`file-not-in-card`), and fails closed
     (`commit-unreadable`, `register-tampered`) when it cannot read the commit. Everything else is allowed."""
     profile = ctx.profile if isinstance(ctx.profile, dict) else {}
     tool_input = ctx.tool_input if isinstance(ctx.tool_input, dict) else {}
@@ -154,14 +80,14 @@ def check(event, ctx):
                                                 f"could not be checked; run it again from the repository")
 
 
-def _unreadable(command: str, shell: str):
+def _unreadable(command: str, shell: str, extra=frozenset()):
     """The text of what makes a commit of this command unreadable, or None (the lock gate's own conditions)."""
     if not helpers.parse_ok(command, shell) and helpers.names_git_commit(command):
         return "this command cannot be parsed and holds a `git ... commit`"
     carrier = helpers.carried_commit(command, shell)
     if carrier:
         return f"this command may run a `git ... commit` the gate cannot read (through {carrier})"
-    form = helpers.git_form_problem(command, shell)
+    form = helpers.git_form_problem(command, shell, extra)
     if form:
         return form[1]
     shape = helpers.unknown_shape(command, shell)
@@ -182,7 +108,7 @@ def _git_words(command: str, shell: str):
 
 
 def _shell(ctx, profile, command: str, shell: str):
-    why = _unreadable(command, shell)
+    why = _unreadable(command, shell, profiles.git_builtins_extra(profile))
     if why:
         return gate.refuse("commit-unreadable", f"{why}, so its commit cannot be checked; run the commit alone, in a "
                                                 f"plain form: `git commit -m \"<message>\" -- <paths>`")
@@ -193,8 +119,9 @@ def _shell(ctx, profile, command: str, shell: str):
     if other:
         return gate.refuse("commit-unreadable", f"this command runs `git {other[0]}` beside the commit; the hook "
                                                 f"reads the index before the command runs, so what the commit holds "
-                                                f"cannot be checked. Run `git {other[0]}` in a call of its own, then "
-                                                f"the commit alone")
+                                                f"cannot be checked; run git {other[0]} and git commit as two "
+                                                f"separate calls: `git {other[0]}` in a call of its own, then the "
+                                                f"commit alone")
     for commit in commits:
         verdict = _commit(ctx, profile, commit)
         if verdict is not None:
@@ -235,15 +162,13 @@ def _tracked_changes(ctx, folder, specs=()):
 
 
 def _taken(ctx, folder, commit):
-    """[(status, repo path, source)] the commit would take: the files each form of `git commit` stages. `source` is
-    `index` (the staged blob) or `work` (the working-tree file). None when git cannot tell."""
+    """[(status, repo path, source)] the commit would take: git's staged list always (whatever the command names),
+    and the files a `--` or `-a` form takes from the working tree. `source` is `index` (the staged blob) or `work`
+    (the working-tree file). None when git cannot tell."""
     named = _tracked_changes(ctx, folder, commit.paths) if commit.paths else []
-    staged = []
-    if commit.include or not commit.paths:
-        if commit.all and not commit.paths:
-            named = _tracked_changes(ctx, folder)
-        else:
-            staged = _name_status(ctx, folder, "diff", "--cached", "--name-status", "--no-renames", "-z")
+    if commit.all and not commit.paths:
+        named = _tracked_changes(ctx, folder)
+    staged = _name_status(ctx, folder, "diff", "--cached", "--name-status", "--no-renames", "-z")
     if named is None or staged is None:
         return None
     seen = {rel for _status, rel in named}
@@ -298,6 +223,12 @@ def _commit(ctx, profile, commit):
     recorded = cardtool.paths_set(row.get("paths", "")) if is_open else frozenset()
     files = [rel for _status, rel, _source in taken if not _always(ctx, profile, row, rel)]
     outside = [rel for rel in files if not is_open or (recorded and not any(helpers.matches(rel, e) for e in recorded))]
+    sources = {rel: source for _status, rel, source in taken}
+    named_out = [rel for rel in outside if sources.get(rel) == "work"]
+    staged_out = [rel for rel in outside if sources.get(rel) == "index"]
+    way = "; and ".join(w for w in (_way_out(commit, named_out) if named_out else "",
+                                    f"unstage {_list(staged_out)} with `git restore --staged "
+                                    f"{' '.join(dict.fromkeys(staged_out))}`" if staged_out else "") if w)
     if outside:
         if not is_open:
             held = f"{card_id} is {status}" if row else "no card is taken"
@@ -306,18 +237,9 @@ def _commit(ctx, profile, commit):
                                                    f"the owner has opened (`{CLI} card take <id>`)")
         shown = "; ".join(sorted(recorded))
         return gate.refuse("file-not-in-card", f"{_list(outside)} {'is' if len(set(outside)) == 1 else 'are'} not in "
-                                               f"the Paths of {card_id} ({shown}); {_way_out(commit, outside)}, or "
+                                               f"the Paths of {card_id} ({shown}); {way}, or "
                                                f"add them to the card and ask the owner to `card open {card_id}` "
                                                f"again, or write a new card")
-    own, unresolved = touched(profiles.state_dir(ctx.root, profile), ctx.session_id)
-    ride = [] if unresolved else [rel for rel in files if not any(helpers.matches(rel, p) for p in own)]
-    if ride:
-        way = _way_out(commit, ride)
-        return gate.refuse("ride-in-file", f"{_list(ride)} {'was' if len(set(ride)) == 1 else 'were'} not written by "
-                                           f"this session (no edit or shell write of it is recorded): a ride-in from "
-                                           f"another session. {way[0].upper()}{way[1:]}. A file of yours "
-                                           f"written by a script the gate cannot read: write it through the Write "
-                                           f"tool or a plain redirect, so it is recorded")
     verdict = _content(ctx, profile, commit, taken)
     if verdict is not None:
         return verdict
@@ -363,15 +285,17 @@ def _message(profile, commit, card_id):
                                                 f"`-m`), so it cannot check that it names {card_id}; give it with "
                                                 f"-m \"{card_id} <what changed>\" (several -m for paragraphs), or "
                                                 f"-F - with a here-document, or -F with a message file that exists")
+    own = re.findall(rf"(?<![A-Za-z0-9_-]){re.escape(card_id)}(?![0-9A-Za-z_])", commit.message)
+    if own:  # MW-033: the open card's own id, literally, whatever `ids.card_prefix` is now
+        return None
     try:
         found = cardtool.id_pattern(profile).findall(commit.message)
-    except cardtool.CardError:  # no `ids.card_prefix`: the open card's own id is still a whole id
-        found = re.findall(rf"(?<![A-Za-z0-9_-]){re.escape(card_id)}(?![0-9A-Za-z_])", commit.message)
-    if card_id in found:
-        return None
+    except cardtool.CardError:  # no `ids.card_prefix`: only the open card's own id is a whole id
+        found = []
     named = ", ".join(dict.fromkeys(found)) or "no card"
-    return gate.refuse("commit-message-card", f"the message names {named}, not the open card {card_id}; start it with "
-                                              f"the id: -m \"{card_id} <what changed>\"")
+    return gate.refuse("commit-message-card", f"the message names {named}, not the open card {card_id}; put the card "
+                                              f"id anywhere in the first line, for example -m \"{card_id} <what "
+                                              f"changed>\"")
 
 
 def _name_hit(name: str, pattern: str) -> bool:

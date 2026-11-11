@@ -3,6 +3,7 @@ files that cross worktrees (`leads.json`, `inbox/<session id>.jsonl`, `sessions.
 root folder. A scratch repository with a linked worktree, and a folder with no git, under the pytest temp folder."""
 import json
 import re
+from pathlib import Path
 
 import pytest
 
@@ -31,20 +32,14 @@ def _pair(tmp_path, *, sub=""):
     git(top, "init", "-q")
     root = top / sub if sub else top
     (root / "mkway").mkdir(parents=True, exist_ok=True)
-    task = task_root(tmp_path, name="src")
+    shared = str((root / "mkway" / "state").resolve())  # MW-026: the sharing is opt-in, the owner names the folder
+    task = task_root(tmp_path, name="src", state={"dir": "mkway/state", "shared_dir": shared})
     (root / "mkway" / "profile.json").write_bytes((task / "mkway" / "profile.json").read_bytes())
     git(top, "add", "-A")
     git(top, "commit", "-q", "-m", "profile")
     linked = tmp_path / "linked"
     git(top, "worktree", "add", "-q", str(linked), "-b", "wt")
     return root, (linked / sub if sub else linked)
-
-
-@pytest.fixture(autouse=True)
-def _fresh_cache():
-    profiles._SHARED.clear()
-    yield
-    profiles._SHARED.clear()
 
 
 def test_a_folder_with_no_git_and_a_main_work_tree_share_nothing_else(tmp_path, monkeypatch):
@@ -69,32 +64,18 @@ def test_a_linked_work_tree_shares_the_main_work_trees_state_dir(tmp_path):
         profiles.state_dir(main2, _profile(main2)).resolve()
 
 
-def test_git_failing_gives_the_state_dir_and_the_answer_is_resolved_once(tmp_path, monkeypatch):
-    """E22: a git that fails (an error, a non-zero exit) gives `state_dir`; the answer for a root is resolved once per
-    process, so a hook that asks many times starts git once."""
+def test_the_lookup_never_asks_git(tmp_path, monkeypatch):
+    """E22 (changed by MW-026): the shared dir is the key `state.shared_dir` or `state_dir`; the lookup starts no git,
+    so there is nothing to resolve once or to fail."""
     main, linked = _pair(tmp_path)
-    profile = _profile(linked)
-    calls = []
-    real = runner.git
 
-    def counting(*args, **kwargs):
-        calls.append(args)
-        return real(*args, **kwargs)
+    def forbidden(*args, **kwargs):
+        raise AssertionError("the lookup asked git")
 
-    monkeypatch.setattr(runner, "git", counting)
-    first = profiles.shared_state_dir(linked, profile)
-    n = len(calls)
-    assert n >= 1 and profiles.shared_state_dir(linked, profile) == first and len(calls) == n
-
-    def broken(*args, **kwargs):
-        raise OSError("no git")
-
-    profiles._SHARED.clear()
-    monkeypatch.setattr(runner, "git", broken)
-    assert profiles.shared_state_dir(linked, profile) == profiles.state_dir(linked, profile)
-    profiles._SHARED.clear()
-    monkeypatch.setattr(runner, "git", lambda *a, **k: type("P", (), {"returncode": 128, "stdout": ""})())
-    assert profiles.shared_state_dir(linked, profile) == profiles.state_dir(linked, profile)
+    monkeypatch.setattr(runner, "git", forbidden)
+    assert profiles.shared_state_dir(linked, _profile(linked)) == Path(_profile(linked)["state"]["shared_dir"])
+    assert profiles.shared_state_dir(linked, {"state": {"dir": "mkway/state"}}) == \
+        profiles.state_dir(linked, {"state": {"dir": "mkway/state"}})
 
 
 def test_leads_and_inbox_written_in_a_linked_work_tree_live_in_the_main_state(tmp_path):
@@ -193,6 +174,7 @@ def test_lead_add_names_a_session_known_from_the_shared_file(tmp_path):
     assert leads.is_lead(profiles.shared_state_dir(main, _profile(main)), "far-away-1")
 
 
+@pytest.mark.engine_repo  # MW-025: the README is not in an installed copy
 def test_the_readme_and_keys_name_the_shared_files():
     """E26: the lead role section names `sessions.jsonl`, the shared state folder and the linked work tree."""
     from _engine import REPO

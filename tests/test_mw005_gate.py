@@ -247,7 +247,8 @@ def test_the_gate_is_in_the_shell_group_after_the_lock_gate_and_has_a_switch(pro
     # checks of `commit_files` come before the slow test run of `commit_tests`, which still follows `lock.shell`
     # changed by the port onto MW-009: the shell group also holds `delete`, after `commit_files` and before the slow run
     # changed by MW-017 (E8): the shell group also holds `lead.shell`, first, so a lead's refusal names the lead rule
-    assert names == ["lead.shell", "lock.shell", "touched.shell", "commit_files", "delete", "commit_tests"]
+    # changed by MW-034 (E8): `touched.shell` is gone with the write record
+    assert names == ["lead.shell", "lock.shell", "commit_files", "delete", "commit_tests"]
     (entry,) = [e for e in manifest if e["name"] == "commit_tests"]
     assert (entry["gate"], entry["event"], entry["matcher"], entry["onFailure"], entry["function"]) == (
         "commit_tests", "PreToolUse", "Bash|PowerShell", "block", "gate_commit_tests:check")

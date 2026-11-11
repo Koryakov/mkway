@@ -2,7 +2,8 @@
 
 Three entries on this gate, all form class (MW-012: watch mode on a first install, `mkway gate on lead` blocks):
 - `lead.edit` (edit tools) and `lead.shell` (shell): a registered lead writes only `<card folder>/ORDER.md` of a card it
-  ordered and the asks folder; any other write is `lead-no-edit`. In the shell, `card take` is `lead-no-take`.
+  ordered, `<card folder>/CARD.md` of a card it ordered while that card is `proposed` (MW-028; open seals it), and the
+  asks folder; any other write is `lead-no-edit`. In the shell, `card take` is `lead-no-take`.
 - `lead.remind` (prompt): the overdue cards of every lead are noticed at any session's next prompt; a lead is reminded
   of its unacked notices (`lead-notices-unacked`).
 
@@ -26,7 +27,9 @@ SHOWN = 5
 
 
 def _allowed(profile) -> str:
-    return f"`<card folder>/ORDER.md` of a card it ordered and the asks folder `{profiles.owner_ask(profile)['dir']}`"
+    return (f"`<card folder>/ORDER.md` of a card it ordered, `<card folder>/CARD.md` of a card it ordered while the "
+            f"card is proposed (after `mkway card open` the card commands or the owner change it), and the asks "
+            f"folder `{profiles.owner_ask(profile)['dir']}`")
 
 
 def _no_edit(profile, what: str):

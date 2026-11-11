@@ -2,7 +2,7 @@
 
     mkway.py hook <event> --group <name> [--root <path>] [--profile <path>]
     mkway.py install --from <engine repo> [--ref <sha or tag>] [--vcs git|none] [--python <command>]
-                     [--root <path>] [--profile <path>]
+                     [--shared <absolute folder>] [--root <path>] [--profile <path>]
     mkway.py check [--root <path>] [--profile <path>]
     mkway.py card new <title> | list | resync [--add-ordered-by] | take <id> | release <id> [--force] | open <id>
                   | close <id> | set <id> open|waiting|closed
@@ -102,7 +102,12 @@ def _parser() -> argparse.ArgumentParser:
     inst.add_argument("--from", dest="source", required=True)
     inst.add_argument("--ref")
     inst.add_argument("--vcs", choices=("git", "none"))
-    inst.add_argument("--python", help="per-machine interpreter command, written into the local settings only")
+    inst.add_argument("--python", help="per-machine interpreter command, recorded in state/machine.json only; the "
+                      "committed hook entries use the profile's python.command")
+    inst.add_argument("--commit", action="store_true",
+                      help="the owner's: run the two printed git lines (add, commit) after install (MW-027)")
+    inst.add_argument("--shared", help="absolute folder for the state shared across worktrees; written into the "
+                      "profile as state.shared_dir (opt-in, MW-026)")
     _place(inst)
     chk = sub.add_parser("check", help="compare the copy with its lock, run its tests and the term scan")
     _place(chk)
@@ -334,6 +339,8 @@ def _owner_only(args, profile=None, root=None):
     if cardtool.approver(profile) == "orderer":  # MW-011: a session's close is the orderer's, decided in `_move`;
         if sub == "close":                      # `card set <id> closed` stays the owner's: no second door
             return None
+        if sub == "open" and "open" in cardtool.owner_moves(profile):  # MW-028: a lead's open of its own proposed
+            return None                                                 # card, decided in `_move` by the permit
         if sub == "set" and args.status == "closed":
             return "card set closed"
     status = {"open": "open", "close": "closed"}.get(sub) or args.status
@@ -374,7 +381,7 @@ def main(argv=None, env=None) -> int:
     if args.command == "install":
         try:
             report = install.install(root, Path(args.source), ref=args.ref, profile_arg=args.profile, vcs=args.vcs,
-                                     python=args.python)
+                                     python=args.python, shared=args.shared, commit=args.commit)
         except install.InstallError as exc:
             return _fail(str(exc))
         print("\n".join(report))
@@ -387,6 +394,8 @@ def main(argv=None, env=None) -> int:
     if args.command == "search":  # MW-008: no profile and no ledger still leave a record (0 hits)
         return _search(root, profile if isinstance(profile, dict) else {}, args, env, session)
     if profile is None:
+        if not paths.profile_path(root, args.profile).is_file():  # MW-024
+            return _fail(install.no_install_line(root))
         return _fail("the profile cannot be read: " + "; ".join(_errors))
     if session and _owner_only(args, profile, root):
         return _refuse_in_session(_owner_only(args, profile, root))
@@ -858,6 +867,17 @@ def _move(run: Run, args) -> int:
                                      f"plain form, in a session with the engine hooks; or {cardtool.OWNER_TERMINAL}",
                                      reason="close-not-orderer")
         written = cardtool.move(root, profile, card_id, "closed", session=True, record_paths=False, closer=closer,
+                                state=run.state)
+        print(f"{card_id} {written}")
+        run.done(sub, card_id)
+        return 0
+    if sub == "open" and run.session and cardtool.approver(profile) == "orderer" \
+            and "open" in cardtool.owner_moves(profile):
+        # MW-028: only the lock gate (the hook) knows the session id and that it is a registered lead; the permit names it
+        opener = cardtool.take_close_permit(run.state, card_id, "open")
+        if opener is None:
+            return _refuse_in_session("card open")
+        written = cardtool.move(root, profile, card_id, "open", session=True, record_paths=True, opener=opener,
                                 state=run.state)
         print(f"{card_id} {written}")
         run.done(sub, card_id)

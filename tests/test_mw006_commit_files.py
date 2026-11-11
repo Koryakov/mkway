@@ -69,18 +69,22 @@ def test_always_allowed_files_and_empty_paths_pass(tmp_path):
 
 
 def test_every_commit_form_reads_the_files_it_would_stage(tmp_path):
-    """E9 (part 3): `-- <paths>` takes only the named files (another file staged beside them is not in this
-    commit); no paths takes the staged files; `-a` takes the tracked changes too; `-i` takes the staged files and the
-    named ones; `--amend` takes the index. Each is judged on exactly those files. Catches: a gate that reads only the
-    index, or one that refuses a staged file the command would leave out."""
+    """E9 (part 3, changed by MW-034 E3): the staged list is judged for every form; `-- <paths>` adds the named
+    files; `-a` adds the tracked changes; `-i` the named ones; `--amend` takes the index. A tracked change that is
+    neither staged nor named is not in the commit. Catches: a gate that trusts the paths typed in the command."""
     root = make_task(tmp_path)
     save(root, "other/t.py", "old\n")
     _known(root, "src/a.py", "other/b.py")
     paths_form = "git commit -m 'CARD-001 x' -- "
-    assert reason(check(root, paths_form + "src/a.py")) == "allow"
+    # changed by MW-034 (E3): the staged list is read for every form, so other/b.py staged beside the named path is
+    # refused too, and the way out for a staged file is to unstage it
+    v = check(root, paths_form + "src/a.py")
+    assert v.reason_id == "file-not-in-card" and "other/b.py" in v.message and "src/a.py" not in v.message
     v = check(root, paths_form + "src/a.py other/b.py")
     assert v.reason_id == "file-not-in-card" and "other/b.py" in v.message and "src/a.py" not in v.message
     assert "`--`" in v.message  # the way out for a named path: leave it out of the paths
+    v = check(root, paths_form + "src/a.py")
+    assert "git restore --staged other/b.py" in v.message and "`--`" not in v.message
     assert check(root, COMMIT).reason_id == "file-not-in-card"  # the index holds other/b.py
     assert check(root, "git commit -i -m 'CARD-001 x' -- src/a.py").reason_id == "file-not-in-card"
     assert check(root, "git commit --amend -m 'CARD-001 x'").reason_id == "file-not-in-card"
@@ -95,50 +99,38 @@ def test_every_commit_form_reads_the_files_it_would_stage(tmp_path):
     assert v.reason_id == "file-not-in-card" and "other/t.py" in v.message and "-a" in v.message
 
 
-def test_a_staged_file_the_session_never_touched_is_a_ride_in(tmp_path):
-    """E10 (part 3): a staged file the session did not write (no edit-tool row, no shell-write row) is a ride-in:
-    `ride-in-file`, naming it, with `git restore --staged <file>`; a file written through an edit tool, a shell
-    write, a glob or a deleting command passes; a staged deletion the session did not make is a ride-in too.
-    Catches: another session's work swept into this session's commit."""
+def test_a_staged_file_outside_the_paths_is_a_ride_in_whoever_wrote_it(tmp_path):
+    """E10 (part 3, changed by MW-034 E8): there is no write record, so a staged file is judged by the Paths alone:
+    files inside the Paths pass whoever wrote them (an edit tool, a script, a glob, a deleting command, a staged
+    deletion); a file outside is `file-not-in-card`, with `git restore --staged <file>`, and under `-a` the way out is
+    no `-a`. Catches: another session's work swept into this session's commit, or a refusal of a script's output."""
     root = make_task(tmp_path, card_paths="`src/`")
     save(root, "src/old.py")
-    save(root, "src/theirs_old.py")
+    save(root, "other/theirs_old.py")
     work(root, "src/mine.py")
-    work(root, "src/other_session.py")
+    work(root, "other/other_session.py")
     work(root, "src/glob1.txt")
-    work(root, "src/glob2.txt")
-    stage(root, "src/mine.py", "src/other_session.py", "src/glob1.txt", "src/glob2.txt")
-    git(root, "rm", "-q", "--", "src/old.py", "src/theirs_old.py")
-    touch(root, "src/mine.py")
-    from _engine import gate_call
-    import gate_commit
-    gate_call(gate_commit.touch, root, tool="Bash", tool_input={"command": "rm src/old.py"})
-    gate_call(gate_commit.touch, root, tool="Bash", tool_input={"command": "touch src/glob*.txt"})
+    stage(root, "src/mine.py", "other/other_session.py", "src/glob1.txt")
+    git(root, "rm", "-q", "--", "src/old.py", "other/theirs_old.py")
     v = check(root, COMMIT)
-    assert v.kind == "refuse" and v.reason_id == "ride-in-file"
-    assert "src/other_session.py" in v.message and "src/theirs_old.py" in v.message
-    for fine in ("src/mine.py", "src/old.py", "src/glob1.txt", "src/glob2.txt"):
+    assert v.kind == "refuse" and v.reason_id == "file-not-in-card"
+    assert "other/other_session.py" in v.message and "other/theirs_old.py" in v.message
+    for fine in ("src/mine.py", "src/old.py", "src/glob1.txt"):
         assert fine not in v.message, fine
-    assert "git restore --staged src/other_session.py src/theirs_old.py" in v.message
-    git(root, "restore", "--staged", "--", "src/other_session.py", "src/theirs_old.py")
+    assert "git restore --staged other/other_session.py other/theirs_old.py" in v.message
+    git(root, "restore", "--staged", "--", "other/other_session.py", "other/theirs_old.py")
     assert reason(check(root, COMMIT)) == "allow"
-    stage(root, "src/other_session.py")
+    work(root, "other/theirs_old.py", "changed\n")  # a tracked change outside the Paths, not staged
     v = check(root, "git commit -a -m 'CARD-001 x'")
-    assert v.reason_id == "ride-in-file" and "-a" in v.message  # under -a the way out is no -a
+    assert v.reason_id == "file-not-in-card" and "-a" in v.message  # under -a the way out is no -a
 
 
-def test_touch_by_another_session_does_not_count_and_unresolved_does(tmp_path):
-    """E11 (part 3): another session's record does not make a file this session's; a shell write this session made
-    that the gate could not read counts every file as touched (the gate cannot tell which file it wrote).
-    Catches: a record shared across sessions, or an unreadable write that is read as no write."""
+def test_no_session_record_decides_a_commit(tmp_path):
+    """E11 (part 3, changed by MW-034 E8): another session's work and the session id do not make a file in the Paths
+    refused; a session with no card still meets rule 1. Catches: a rule that reads who wrote a file."""
     root = make_task(tmp_path, card_paths="`src/`")
     work(root, "src/x.py")
     stage(root, "src/x.py")
-    touch(root, "src/x.py", session="s2")
-    assert check(root, COMMIT).reason_id == "ride-in-file"
-    from _engine import gate_call
-    import gate_commit
-    gate_call(gate_commit.touch, root, tool="Bash", tool_input={"command": "echo y > $TARGET"})
     assert reason(check(root, COMMIT)) == "allow"
     assert check(root, COMMIT, session="s3").reason_id == "file-not-in-card"  # no card: rule 1 still holds
 

@@ -68,8 +68,9 @@ def test_schema_declares_the_q2_groups():
     assert declared - GROUPS == {"user", "vcs", "cards", "register", "paths", "test_roots", "test_env", "knowledge",
                                  "questions", "owner_ask", "agents", "commit", "tests", "delete", "notify",
                                  "leads", "rules", "deliverables",
-                                 "messaging"}  # MW-014 (E19); MW-017 (E20); MW-021 (E1); MW-018 (E16): `messaging`;
-    # MW-020 (E1): `deliverables`
+                                 "messaging",
+                                 "lock_gate"}  # MW-014 (E19); MW-017 (E20); MW-021 (E1); MW-018 (E16): `messaging`;
+    # MW-020 (E1): `deliverables`; MW-031: `lock_gate` (names added to the git built-in list)
     required = set(schema.get("required", []))
     assert not (LATER_GROUPS & required)
     assert "user" not in required

@@ -1,7 +1,7 @@
 """Lock targets and lock files (card MW-003, deliverable 3; spec section 1).
 
 A target is a name and repo paths or globs. The built-in targets cannot be removed by the profile: the engine copy,
-`mkway.lock`, the profile, the owned hook entries (`.claude/settings.local.json`), `<bundle.root>/locks/`, the
+`mkway.lock`, the profile, the hook entries (`.claude/settings.json`, committed; MW-027, and the owner's `.claude/settings.local.json`),`<bundle.root>/locks/`, the
 bundle `.gitignore` (R18) and `.gitattributes` (R19a), the register and `<state.dir>/`. `locks/`, the register and
 the state folder are never open: their only writers are the engine's own commands. The profile adds targets in
 `locks.targets[]`. A target in a user home folder needs a per-machine list and is off (R4).
@@ -46,7 +46,7 @@ def built_in(root, profile, profile_file=None) -> list:
         Target("engine", [f"{b}/engine/"], True),
         Target("lock", [f"{b}/mkway.lock"], True),
         Target("profile", [pfile or f"{b}/profile.json"], True),
-        Target("hooks", [".claude/settings.local.json"], True),
+        Target("hooks", [".claude/settings.json", ".claude/settings.local.json"], True),  # MW-027: the committed file
         Target("locks", [f"{b}/locks/"], True),
         Target("gitignore", [f"{b}/.gitignore"], True),
         Target("gitattributes", [f"{b}/.gitattributes"], True),

@@ -68,35 +68,34 @@ def state_dir(root: Path, profile) -> Path:
     return Path(root) / (value if _valid_relative(value) else DEFAULT_STATE_DIR)
 
 
-_SHARED: dict = {}  # (root, state dir) -> the shared dir: resolved once per process (MW-017, addition 1)
-
-
-def _linked_main_state(root: Path, own: Path) -> Path:
+def main_mirror_state(root: Path, own: Path):
     """`<main work tree root>/<the same path below the top>/<state.dir>` when `root` is in a linked git work tree (its
-    git dir is not the common one), else `own`. Raises on anything unreadable: the caller then takes `own`."""
-    import runner
-    probes = [runner.git(root, "rev-parse", flag) for flag in ("--git-common-dir", "--git-dir", "--show-toplevel")]
-    if any(p.returncode != 0 for p in probes):
-        return own
-    common, gitdir, top = (Path(root, p.stdout.strip()).resolve() for p in probes)
-    if common == gitdir or common.name != ".git":
-        return own
-    below = Path(root).resolve().relative_to(top)
-    return common.parent / below / own.resolve().relative_to(Path(root).resolve())
+    git dir is not the common one), else None. Read-only: `mkway check` looks there for state that 0.2.0 and 0.2.1
+    wrote outside the root (MW-026). Any failure (no git, a timeout, an odd layout) is None."""
+    try:
+        import runner
+        probes = [runner.git(root, "rev-parse", flag) for flag in ("--git-common-dir", "--git-dir", "--show-toplevel")]
+        if any(p.returncode != 0 for p in probes):
+            return None
+        common, gitdir, top = (Path(root, p.stdout.strip()).resolve() for p in probes)
+        if common == gitdir or common.name != ".git":
+            return None
+        below = Path(root).resolve().relative_to(top)
+        return common.parent / below / own.resolve().relative_to(Path(root).resolve())
+    except Exception:
+        return None
 
 
 def shared_state_dir(root: Path, profile) -> Path:
-    """Where files that cross work trees live (MW-017: `leads.json`, `inbox/`, `sessions.jsonl`). In a linked git work
-    tree it is the main work tree's state folder; in the main one, in a folder with no git, and when git fails it is
-    `state_dir`. Everything else stays in each work tree's own state folder."""
-    own = state_dir(root, profile)
-    key = (str(Path(root)), str(own))
-    if key not in _SHARED:
-        try:
-            _SHARED[key] = _linked_main_state(Path(root), own)
-        except Exception:  # git missing, a timeout, a state folder outside the root: the own folder
-            _SHARED[key] = own
-    return _SHARED[key]
+    """Where the files that cross worktrees live (`leads.json`, `inbox/`, `sessions.jsonl`, `pings.jsonl`,
+    `dead-letter.jsonl`, the lock markers). The engine never writes outside the mkway root by its own path logic
+    (MW-026), so it is `state_dir`, unless the owner opts in with the absolute path `state.shared_dir`; a value that is
+    not an absolute path is ignored."""
+    value = profile.get("state", {}).get("shared_dir") if isinstance(profile, dict) and isinstance(
+        profile.get("state"), dict) else None
+    if isinstance(value, str) and schema_check._format_error("absolute-path", value) is None:
+        return Path(value)
+    return state_dir(root, profile)
 
 
 OWNER_ASK_DIR = "asks"  # inside the bundle: `<bundle.root>/asks`, unless the profile names a folder (MW-007)
@@ -220,6 +219,15 @@ TEST_ROOTS = ["tests"]  # `test_roots` default (MW-005; KEYS.md row 1)
 COMMIT_TESTS_BUDGET = 780  # seconds: `gates.commit_tests.budget_seconds` default (MW-005)
 DOCS_DEFAULT = ["cards/**", "ledger/**", "*.md"]  # `paths.docs` default; the first two sit in the bundle (MW-005)
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def git_builtins_extra(profile) -> set:
+    """MW-031: `lock_gate.git_builtins_extra`, git built-in names the owner adds to the engine list; none when the key
+    is missing or unusable."""
+    group = profile.get("lock_gate") if isinstance(profile, dict) else None
+    value = group.get("git_builtins_extra") if isinstance(group, dict) else None
+    clean = _clean_strings(value)
+    return set(clean) if clean else set()
 
 
 def test_roots(profile) -> list:

@@ -1,7 +1,8 @@
 """The task root and the profile location (card MW-002, deliverable 5; defects 21-22, R8).
 
 The root is `--root <path>`, else `$CLAUDE_PROJECT_DIR`, else (vcs git) `git rev-parse --show-toplevel` run from
-the current folder. With vcs none and neither given there is no root. The root is never computed from the engine's
+the current folder; below that top, the nearest folder up from the current folder that holds `mkway/profile.json`
+wins (MW-024), and without one the top stays the answer. With vcs none and neither given there is no root. The root is never computed from the engine's
 own location.
 
 The profile is `--profile <path>` (a relative path is read from the root), else `<root>/mkway/profile.json`. No
@@ -40,7 +41,14 @@ def find_root(env: Optional[Mapping[str, str]] = None, root_arg: Optional[str] =
     top = proc.stdout.strip()
     if proc.returncode != 0 or not top:
         raise RootNotFound("no --root, no $CLAUDE_PROJECT_DIR, and not inside a git work tree")
-    return Path(top).resolve()
+    top = Path(top).resolve()
+    here = Path(cwd).resolve() if cwd else Path.cwd().resolve()  # MW-024: the task root may sit below the git top
+    for folder in (here, *here.parents):
+        if (folder / PROFILE_FOLDER / PROFILE_NAME).is_file():
+            return folder
+        if folder == top:
+            break
+    return top
 
 
 def profile_path(root: Path, profile_arg: Optional[str] = None) -> Path:

@@ -49,7 +49,7 @@ def test_settings_hold_the_agent_entries_once(tmp_path):
     duplicate after a re-install, a foreign hook removed."""
     profile = make_profile()
     entries = install.generate_entries(profile, _manifest())
-    settings = tmp_path / ".claude" / "settings.local.json"
+    settings = tmp_path / ".claude" / "settings.json"
     settings.parent.mkdir()
     foreign = {"hooks": [{"type": "command", "command": "python other_hook.py", "timeout": 5}]}
     settings.write_text(json.dumps({"hooks": {"SubagentStop": [foreign]}}), encoding="utf-8")

@@ -80,7 +80,10 @@ def test_keys_md_has_one_line_per_draft_key():
         "owner_ask.max_open", "owner_ask.tool_allowed", "notify.command",  # changed by MW-014 (E19): the asks that do not stop the work
         "leads.escalate_hours", "leads.max_cards",  # changed by MW-017 (E20): the lead role's two keys
         "messaging.duplicate_window_hours", "messaging.dead_hours",  # changed by MW-018 (E14): the messaging keys
-        "messaging.ack_reminder_minutes"}
+        "messaging.ack_reminder_minutes",
+        "state.shared_dir",  # changed by MW-026: the opt-in shared state folder
+        "lock_gate.git_builtins_extra",  # changed by MW-031: names added to the git built-in list
+        "commit.message_prefix"}  # changed by MW-035: the prefix of the install commit message
     schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
     assert now_paths == _leaves(schema)
 

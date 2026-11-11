@@ -37,6 +37,7 @@ ROLE = "lead"
 ENGINE = "engine"  # the `from` of a notice the engine writes
 NOTICE = "notice"
 ORDER_FILE = "ORDER.md"
+CARD_FILE = "CARD.md"
 ACTIVE = ("open", "waiting", "waiting-owner")  # a card that is being worked: its Appetite runs
 _SAFE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 
@@ -480,7 +481,9 @@ def write_order(folder, card_id: str) -> Optional[Path]:
 
 def writable(root, profile, session, rel) -> bool:
     """True when `rel` (a repo path) is one a registered lead may write: `<card folder>/ORDER.md` of a card it
-    ordered, or inside the asks folder. Whether the session is a lead is the caller's check."""
+    ordered, `<card folder>/CARD.md` of a card it ordered while the card is `proposed` (MW-028: the lead authors its
+    own card before the owner opens it; the sealed register's status decides), or inside the asks folder. Whether the
+    session is a lead is the caller's check."""
     if not isinstance(rel, str):
         return False
     if helpers.matches(rel, profiles.owner_ask(profile)["dir"]):
@@ -493,6 +496,11 @@ def writable(root, profile, session, rel) -> bool:
         if (row.get(register.ORDERED) or register.OWNER) != session:
             continue
         folder = cardtool.norm_entry(row.get("folder", ""))
-        if folder and helpers.matches(rel, f"{folder}/{ORDER_FILE}"):
+        if not folder:
+            continue
+        if helpers.matches(rel, f"{folder}/{ORDER_FILE}"):
+            return True
+        if row.get("status") == "proposed" and helpers.matches(rel, f"{folder}/{CARD_FILE}") \
+                and not register.seal_problem(root, profile):
             return True
     return False

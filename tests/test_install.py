@@ -149,9 +149,10 @@ def test_install_creates_folders_starter_profile_and_ignore_lines(tmp_path):
     profile = json.loads((bundle / "profile.json").read_text(encoding="utf-8"))
     assert profile["vcs"] == "git" and profile["ids"]["card_prefix"] == "CARD"
     assert (profile["bundle"]["root"], profile["state"]["dir"]) == ("mkway", "mkway/state")
-    for rel in ("mkway/engine/mkway.py", "mkway/locks/x", "mkway/state/x"):
+    for rel in ("mkway/locks/x", "mkway/state/x"):  # MW-027: the engine copy is tracked now
         assert subprocess.run(["git", "check-ignore", "-q", rel], cwd=str(task)).returncode == 0, rel
-    for rel in ("mkway/profile.json", "mkway/mkway.lock", "mkway/cards/x.md", "mkway/ledger/x"):
+    for rel in ("mkway/engine/mkway.py", "mkway/profile.json", "mkway/mkway.lock", "mkway/cards/x.md",
+                "mkway/ledger/x"):
         assert subprocess.run(["git", "check-ignore", "-q", rel], cwd=str(task)).returncode == 1, rel
     custom = make_profile(gates={"x": {"on": False}}, vcs="git", ids={"card_prefix": "QQ"})
     write_profile(task, custom)
@@ -161,7 +162,7 @@ def test_install_creates_folders_starter_profile_and_ignore_lines(tmp_path):
     task2 = make_task(tmp_path, vcs="none", name="task2")
     assert mkway(task2, env, "install", "--from", str(src), "--vcs", "none").returncode == 0
     assert json.loads((task2 / "mkway" / "profile.json").read_text(encoding="utf-8"))["vcs"] == "none"
-    assert not (task2 / "mkway" / ".gitignore").exists() and not (task2 / ".gitignore").exists()
+    assert (task2 / "mkway" / ".gitignore").exists() and not (task2 / ".gitignore").exists()  # MW-027: written always
 
 
 def test_hook_entries_generated_and_other_keys_kept(tmp_path):
@@ -176,7 +177,7 @@ def test_hook_entries_generated_and_other_keys_kept(tmp_path):
     alone, as before."""
     src = make_source(tmp_path, vcs="none", fixture_gate=True, engine_gates=False)
     task = make_task(tmp_path, vcs="none")
-    settings = task / ".claude" / "settings.local.json"
+    settings = task / ".claude" / "settings.json"  # MW-027: the committed file, not settings.local.json
     settings.parent.mkdir()
     foreign = {"matcher": "Bash", "hooks": [{"type": "command", "command": "python other_hook.py", "timeout": 5}]}
     head = '{\n  "env": {"A":   "1"},\n  "permissions": {"allow": ["Read(x)"]},\n'
@@ -234,11 +235,12 @@ def test_cards_and_ledger_are_tracked(tmp_path):
     for rel in ("mkway/cards/", "mkway/cards/x.md", "mkway/ledger/", "mkway/ledger/x.md", "mkway/profile.json",
                 "mkway/mkway.lock", "mkway/.gitignore"):
         assert not ignored(rel), rel
-    for rel in ("mkway/engine/", "mkway/engine/mkway.py", "mkway/locks/", "mkway/state/"):
+    for rel in ("mkway/locks/", "mkway/state/"):  # MW-027: the engine copy is tracked, so a worktree needs no install
         assert ignored(rel), rel
+    assert not ignored("mkway/engine/") and not ignored("mkway/engine/mkway.py")
     lines = [line for line in (bundle / ".gitignore").read_text(encoding="utf-8").splitlines()
              if line and not line.startswith("#")]
-    assert lines == ["engine/", "locks/", "state/"]
+    assert lines == ["locks/", "state/", "__pycache__/", "*.pyc", ".pytest_tmp/", ".pytest_cache/"]
 
 
 def test_install_names_old_ignore_lines_for_cards_and_ledger(tmp_path):
@@ -257,13 +259,14 @@ def test_install_names_old_ignore_lines_for_cards_and_ledger(tmp_path):
     ignore.write_text(old, encoding="utf-8")
     proc = mkway(task, env, "install", "--from", str(src))
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    (line,) = [x for x in proc.stdout.splitlines() if x.startswith("ignore:")]
-    assert "cards/" in line and "ledger/" in line and "R18" in line
+    (line,) = [x for x in proc.stdout.splitlines() if x.startswith("ignore:") and "R18" in x]  # MW-027: `engine/` has its own line
+    assert "cards/" in line and "ledger/" in line
     after = ignore.read_text(encoding="utf-8").splitlines()
-    assert set(old.splitlines()) <= set(after)  # every old line kept
+    assert set(old.splitlines()) - {"engine/"} <= set(after)  # every old line kept (MW-035: but the `engine/` line)
+    assert "engine/" not in after
     ignore.write_text("engine/\nledger/\nlocks/\nstate/\n", encoding="utf-8")
     proc = mkway(task, env, "install", "--from", str(src))
-    (line,) = [x for x in proc.stdout.splitlines() if x.startswith("ignore:")]
+    (line,) = [x for x in proc.stdout.splitlines() if x.startswith("ignore:") and "R18" in x]
     assert "ledger/" in line and "cards/" not in line
     fresh = make_task(tmp_path, vcs="git", name="fresh")
     proc = mkway(fresh, env, "install", "--from", str(src))
@@ -360,9 +363,11 @@ def test_install_refuses_a_python_that_is_not_an_interpreter(tmp_path):
         assert proc.returncode == 0, value + proc.stdout + proc.stderr
     quoted = '"' + sys.executable + '"'
     assert mkway(task, env, "install", "--from", str(src), "--vcs", "none", "--python", quoted).returncode == 0
-    settings = json.loads((task / ".claude" / "settings.local.json").read_text(encoding="utf-8"))
-    assert settings["hooks"]["SessionStart"][0]["hooks"][0]["command"].startswith(
-        quoted + ' -I -X utf8 "${CLAUDE_PROJECT_DIR}')
+    settings = json.loads((task / ".claude" / "settings.json").read_text(encoding="utf-8"))
+    assert settings["hooks"]["SessionStart"][0]["hooks"][0]["command"].startswith(  # MW-027: the profile's command
+        'python -I -X utf8 "${CLAUDE_PROJECT_DIR}')
+    machine = json.loads((task / "mkway" / "state" / "machine.json").read_text(encoding="utf-8"))
+    assert machine == {"python": quoted}  # the per-machine interpreter is recorded here only
 
 
 def test_install_never_touches_the_home_folder(tmp_path):
@@ -441,9 +446,12 @@ def test_install_writes_the_machine_interpreter(tmp_path):
     assert proc.returncode == 0, proc.stdout + proc.stderr
     machine = json.loads((task / "mkway" / "state" / "machine.json").read_text(encoding="utf-8"))
     assert machine == {"python": "py -3"}
-    settings = json.loads((task / ".claude" / "settings.local.json").read_text(encoding="utf-8"))
-    assert settings["hooks"]["SessionStart"][0]["hooks"][0]["command"].startswith('py -3 -I -X utf8 "${CLAUDE_PROJECT_DIR}/')
-    assert "drift: none" in _start_context(task, env)
+    settings = json.loads((task / ".claude" / "settings.json").read_text(encoding="utf-8"))
+    # MW-027: the committed entries carry the profile's `python.command`; the machine's own stays in machine.json, and
+    # the start line says so as drift-machine
+    assert settings["hooks"]["SessionStart"][0]["hooks"][0]["command"].startswith('python -I -X utf8 "${CLAUDE_PROJECT_DIR}/')
+    context = _start_context(task, env)
+    assert "drift: none" not in context and "drift-machine" in context
 
 
 def test_profile_arg_install_has_no_false_drift(tmp_path):
@@ -454,7 +462,7 @@ def test_profile_arg_install_has_no_false_drift(tmp_path):
     env = clean_env(tmp_path)
     proc = mkway(task, env, "install", "--from", str(src), "--vcs", "none", "--profile", "conf/p.json")
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    settings = json.loads((task / ".claude" / "settings.local.json").read_text(encoding="utf-8"))
+    settings = json.loads((task / ".claude" / "settings.json").read_text(encoding="utf-8"))
     command = settings["hooks"]["SessionStart"][0]["hooks"][0]["command"]
     assert command.endswith('--profile "${CLAUDE_PROJECT_DIR}/conf/p.json"')
     assert "drift: none" in _start_context(task, env, "--profile", str(task / "conf" / "p.json"))
@@ -529,15 +537,17 @@ def test_check_with_a_missing_term_file_says_so(tmp_path):
 
 
 def test_install_says_when_git_cannot_check_the_ignore(tmp_path):
-    """E52 (content check F7): when the profile says git but git cannot check the ignore (not a git work tree),
-    install says so and names the hand fix."""
+    """E52 (content check F7; changed by MW-027): install no longer asks git about `settings.local.json` (it writes
+    none), so when the profile says git but the folder is no git work tree, install still succeeds and writes the
+    bundle `.gitignore`, with no ignore-check line."""
     src = make_source(tmp_path, vcs="none")
     task = make_task(tmp_path, vcs="none")
     write_profile(task, make_profile(vcs="git"))
     env = clean_env(tmp_path, GIT_CEILING_DIRECTORIES=str(tmp_path))
     proc = mkway(task, env, "install", "--from", str(src))
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert "ignore: git could not check .claude/settings.local.json" in proc.stdout
+    assert "could not check" not in proc.stdout and "Traceback" not in proc.stderr
+    assert (task / "mkway" / ".gitignore").is_file()
 
 
 def test_check_runs_the_term_scan_when_a_term_file_is_set(tmp_path):

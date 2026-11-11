@@ -25,3 +25,15 @@
 | MW-021 | Rule cards paired with tests | proposed | `cards/MW-021-rule-tests` |
 | MW-022 | Locks reach every worktree | proposed | `cards/MW-022-locks-shared` |
 | MW-023 | One tree key for green test rows | proposed | `cards/MW-023-green-tree-key` |
+| MW-024 | Commands find the task root below the git top | proposed | `cards/MW-024-task-root-below-top` |
+| MW-025 | The install check runs only tests that fit a copy | proposed | `cards/MW-025-copy-check` |
+| MW-026 | State never outside the mkway root | proposed | `cards/MW-026-state-in-root` |
+| MW-028 | A lead authors its own proposed cards, and a root below the git top reads vcs git | proposed | `cards/MW-028-lead-authors` |
+| MW-029 | The copy guard is fast | proposed | `cards/MW-029-fast-copy-guard` |
+| MW-030 | Live install test is the release gate: no version is tagged before it passes | proposed | `cards/MW-030-live-install-test` |
+| MW-031 | git built-in list current, check warns only on the risky side | proposed | `cards/MW-031-git-builtins-current` |
+| MW-032 | Reinstall never fails half-way, check leaves nothing in the copy | proposed | `cards/MW-032-reinstall-safe` |
+| MW-027 | Install: one step to a committed fence | proposed | `cards/MW-027-install-commit` |
+| MW-033 | The commit message names the card anywhere in the first line | proposed | `cards/MW-033-commit-msg-card-anywhere` |
+| MW-034 | The commit check reads what the commit takes; one builder per root | proposed | `cards/MW-034-staged-paths` |
+| MW-035 | Install finishes its own commit in one correct step | proposed | `cards/MW-035-install-one-line` |

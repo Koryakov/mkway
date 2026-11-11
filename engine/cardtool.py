@@ -364,15 +364,16 @@ FAILED = re.compile(r"^(?:FAILED|ERROR) (\S+)", re.M)
 OWNER_TERMINAL = "the owner closes it in their own terminal"
 
 
-def _permit_file(state, card_id: str) -> Optional[Path]:
+def _permit_file(state, card_id: str, kind: str = "close") -> Optional[Path]:
     if not isinstance(card_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", card_id):
         return None
-    return Path(state) / PERMITS / f"close-{card_id}.json"
+    return Path(state) / PERMITS / f"{kind}-{card_id}.json"
 
 
-def issue_close_permit(state, card_id: str, session) -> bool:
-    """Leave the one-use permit of a close: the card and the session id the hook input gave."""
-    target = _permit_file(state, card_id)
+def issue_close_permit(state, card_id: str, session, kind: str = "close") -> bool:
+    """Leave the one-use permit of a close (MW-028: `kind` "open" for a lead's open of a card it ordered): the card
+    and the session id the hook input gave."""
+    target = _permit_file(state, card_id, kind)
     if target is None or not isinstance(session, str) or not session.strip():
         return False
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -383,10 +384,10 @@ def issue_close_permit(state, card_id: str, session) -> bool:
     return True
 
 
-def take_close_permit(state, card_id: str) -> Optional[str]:
-    """The session id of the card's permit, once: the file is removed whatever it holds. None when there is none, it
-    is older than PERMIT_SECONDS, or it cannot be read."""
-    target = _permit_file(state, card_id)
+def take_close_permit(state, card_id: str, kind: str = "close") -> Optional[str]:
+    """The session id of the card's permit of that kind, once: the file is removed whatever it holds. None when there
+    is none, it is older than PERMIT_SECONDS, or it cannot be read."""
+    target = _permit_file(state, card_id, kind)
     if target is None:
         return None
     try:
@@ -526,22 +527,46 @@ def allowed_moves(status: str, session: bool) -> list:
     }.get(status, [])
 
 
+def open_problem(row: dict, session, is_lead: bool):
+    """MW-028: None when `session` may open the card of `row` as its orderer, else (reason id, message that names the
+    way out). Only a registered lead, only a card it ordered, only while the card is `proposed`; a card the owner
+    ordered, or another session ordered, stays the owner's to open."""
+    card_id = row.get("id", "")
+    ordered = row.get(register.ORDERED) or register.OWNER
+    if not isinstance(session, str) or not session.strip() or not is_lead or ordered != session:
+        return ("owner-only-command", f"`mkway card open` is the owner's command for {card_id}: only a registered lead "
+                                      f"opens a card it ordered; otherwise the owner opens it in their own terminal, "
+                                      f"where no hook runs")
+    if row.get("status") != "proposed":
+        return ("card-bad-move", f"{card_id} is {row.get('status')}; a lead opens only a proposed card it ordered")
+    return None
+
+
 def move(root: Path, profile, card_id: str, target: str, *, session: bool, record_paths: bool,
-         light: bool = False, closer: Optional[str] = None, state=None) -> str:
+         light: bool = False, closer: Optional[str] = None, state=None, opener: Optional[str] = None) -> str:
     """Move a card along the chain; returns the status written. `waiting` from the owner's terminal is written
     `waiting-owner`. Refusals: `card-bad-move`, `close-row-without-test`, `card-paths-too-wide`. `closer` (MW-011) is
     the session id of a close by the card's orderer: the orderer, holder, status and test checks run here, with
-    `state` the state folder; refusals `close-not-orderer`, `close-by-holder`, `close-tests-failing`."""
+    `state` the state folder; refusals `close-not-orderer`, `close-by-holder`, `close-tests-failing`. `opener`
+    (MW-028) is the session id of a registered lead's open of a proposed card it ordered; the Paths are recorded as at
+    the owner's open."""
     row = register.find(register.read(root, profile), card_id)
     if row is None:
         raise CardError(f"{card_id} is not in the register", reason="card-unknown")
     status = row.get("status", "")
-    allowed = allowed_moves(status, session and (not light or closer is not None))
+    allowed = allowed_moves(status, session and (not light or closer is not None or opener is not None))
     if target not in SET_TARGETS or target not in allowed:
         raise CardError(f"{card_id} is {status}; allowed moves: {', '.join(allowed) or 'none'}",
                         reason="card-bad-move")
     write = "waiting-owner" if target == "waiting" and not session else target
     ordered = row.get(register.ORDERED) or register.OWNER
+    if opener is not None:
+        import leads  # leads imports this module
+        if target != "open":
+            raise CardError("only an open is made by a lead as orderer", reason="card-bad-move")
+        problem = open_problem(row, opener, leads.is_lead(profiles.shared_state_dir(root, profile), opener))
+        if problem:
+            raise CardError(problem[1], reason=problem[0])
     if closer is not None:
         if target != "closed":
             raise CardError("only a close is made by an orderer", reason="card-bad-move")
@@ -580,14 +605,23 @@ def move(root: Path, profile, card_id: str, target: str, *, session: bool, recor
         r = register.find(rows, card_id)
         if r is None or r.get("status") != status:
             raise CardError(f"{card_id} changed while it was being moved; try again", reason="card-bad-move")
-        if closer is not None and (r.get(register.ORDERED) or register.OWNER) != ordered:
-            raise CardError(f"{card_id}: the order was changed while the tests ran; close it again",
+        if (closer is not None or opener is not None) and (r.get(register.ORDERED) or register.OWNER) != ordered:
+            raise CardError(f"{card_id}: the order was changed while the card was being moved; run it again",
                             reason="close-not-orderer")
         r["status"] = write
         if paths is not None:
             r["paths"] = paths
         return rows
     register.write(root, profile, mutate)
+    if opener is not None:
+        try:
+            text = f"opened by {opener}; ordered by {ordered}"
+            append_log_row(root, profile, card_id, "open", text)
+            ledger.add(root, profile, card=card_id, topic="card open", quote=text, source=f"card {card_id} open")
+        except OSError as exc:
+            raise CardError(f"{card_id} is open, but its Log row could not be written ({exc.__class__.__name__}); "
+                            f"the owner adds the row «opened by {opener}; ordered by {ordered}»",
+                            reason="close-log-failed")
     if closer is not None:
         try:
             text = f"closed by {closer}; ordered by {ordered}"

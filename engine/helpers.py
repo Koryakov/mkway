@@ -818,9 +818,9 @@ _GIT_BUILTINS = None
 
 
 def git_builtins() -> set:
-    """git's built-in commands: the static engine key `lock_gate.git_builtins` in defaults.json (R90). «unverified»:
-    written from knowledge, because `git --list-cmds=builtins` and `git help -a` were refused in the building session;
-    `mkway check` compares it with git's own list in the owner's terminal. The hook runs no git process for it."""
+    """git's built-in commands: the static engine key `lock_gate.git_builtins` in defaults.json (R90), the union of the
+    first list and a git's own `--list-cmds=builtins` (MW-031); `mkway check` compares it with git's list in the
+    owner's terminal, and a profile adds names with `lock_gate.git_builtins_extra`. The hook runs no git process."""
     global _GIT_BUILTINS
     if _GIT_BUILTINS is None:
         data = json.loads((Path(__file__).resolve().parent / "defaults.json").read_text(encoding="utf-8"))
@@ -828,7 +828,7 @@ def git_builtins() -> set:
     return _GIT_BUILTINS
 
 
-def git_form_problem(cmd: str, shell: str = "bash"):
+def git_form_problem(cmd: str, shell: str = "bash", extra=frozenset()):
     """(reason id, what) for a git call the reader cannot check, or None (close-fix 8, A-M2, R83 «refused outright»):
     `--pathspec-from-file` (`pathspec-unparsed`); a `GIT_CONFIG_` assignment anywhere in a command that runs git, a
     git subcommand not in the built-in list (`-c alias.*`, a configured alias), or a `git commit` long option that is
@@ -844,7 +844,7 @@ def git_form_problem(cmd: str, shell: str = "bash"):
             if config_env:
                 return "command-unparsed", "a `GIT_CONFIG_` variable can turn a git command into another one"
             sub, args, _cwd = _git_sub(argv)
-            if sub is not None and sub not in git_builtins():
+            if sub is not None and sub not in git_builtins() and sub not in extra:
                 return "command-unparsed", f"`git {sub}` is not a built-in git command (an alias or an external one)"
             if sub == "commit":
                 i = 0
@@ -861,7 +861,7 @@ def git_form_problem(cmd: str, shell: str = "bash"):
                         not a.startswith("--") and len(a) == 2 and a[0] == "-" and a[1] in _COMMIT_VALUE_SHORT)
                     i += 2 if takes_value else 1
         for sub in s.subs:
-            found = git_form_problem(sub, shell)
+            found = git_form_problem(sub, shell, extra)
             if found:
                 return found
     return None

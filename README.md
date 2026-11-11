@@ -167,7 +167,13 @@ carries, never by a name in a text. The gate `lead` (profile switch `gates.lead`
 - **What a lead may.** Make cards (`mkway card new`; the card's `Ordered by` is the lead, and its folder gets an
   `ORDER.md` from the engine's template with the four headings `Objective`, `Output form`, `Time-box` and `Boundary`),
   write that `ORDER.md` of the cards it ordered and the asks folder, close the cards it ordered (the rule of «Closing
-  cards» is unchanged), and receive notices. It hands a card it ordered to another lead with `mkway give <card>
+  cards» is unchanged), and receive notices. **It authors its own card** (MW-028): while a card it ordered is
+  `proposed`, the lead writes that card's `CARD.md` (Goal, Acceptance, Appetite, Paths) as well, with no card held;
+  both the lead gate and the subtask gate allow exactly that. With `cards.approver: orderer` the lead also runs
+  `mkway card open <card>` on a proposed card it ordered, and the Paths are recorded as at the owner's open; with
+  `owner-only` the open stays the owner's. After the open `CARD.md` is sealed to the lead again (the card commands or
+  the owner change it) and `ORDER.md` stays the lead's. A card the owner ordered, or another lead ordered, is never
+  written or opened by a lead. It hands a card it ordered to another lead with `mkway give <card>
   <id-prefix>`; the card changes hands only when the new lead runs `mkway lead accept <card>`. The owner's `give` needs
   no accept. Refusals: `lead-give-not-yours` (a card another orderer has), `lead-give-not-lead` (the target is no
   lead), `lead-give-self`, `lead-accept-none` (no hand-off waits for this session), `lead-accept-stale` (the orderer
@@ -188,11 +194,13 @@ carries, never by a name in a text. The gate `lead` (profile switch `gates.lead`
 - **The view.** `mkway leads` prints, for each lead: its id, the cards it ordered and has not closed, those past their
   Appetite, its last activity, and its unacked and escalated notices, with each unacked row below. A lead with more cards
   than `leads.max_cards` (default 5) gets a warning line; nothing is ever refused for the number.
-- **Shared state.** Sessions of several git work trees of one repository must see the same leads. `leads.json`,
-  `inbox/<lead id>.jsonl` and `sessions.jsonl` therefore live in the shared state folder: in a linked work tree it is
-  the main work tree's state folder (the same path below the top of the work tree, then `state.dir`); in the main work
-  tree, with no git, or when git fails it is the ordinary state folder. The answer is resolved once for each process.
-  Everything else (records, calls log, permits, once-store, lock markers) stays in each work tree's own state folder.
+- **Shared state.** The engine never writes outside the mkway root by its own path logic: `leads.json`,
+  `inbox/<lead id>.jsonl`, `sessions.jsonl`, `pings.jsonl`, `dead-letter.jsonl` and the lock markers live in the shared
+  state folder, which is the root's own state folder. To share them across the worktrees of one task (a linked work
+  tree), the owner sets the absolute path `state.shared_dir` in the profile, or runs `mkway install --shared <path>`,
+  which writes that key; `mkway check` warns `state-outside-root` when 0.2.0 or 0.2.1 left such files in the main work
+  tree and names the folder, and never removes anything.
+  Everything else (records, calls log, permits, once-store) stays in the root's own state folder.
   `sessions.jsonl` gets a row `{session_id, root, ts}` at each session start and a fresh one at a prompt when the
   session's last row is ten minutes old; `mkway sessions` lists from it and prints the `root` folder of each session
   (`root not established` for a session that only the records know).
@@ -366,22 +374,21 @@ Every helper agent's result is saved with its start and end time, so none is los
   sees its agents; a new session has none yet.
 
 ## Commit checks
-A session's `git commit` is read by one gate before it runs: `commit_files`, three manifest entries and one profile
+A session's `git commit` is read by one gate before it runs: `commit_files`, one manifest entry and one profile
 switch, `gates.commit_files` (with `vcs: none` nothing is checked; the owner's own terminal runs no hook, so nothing is
-gated there). The gate takes the files each form of the commit would stage (`-- <paths>`, the index, `-a`, `-i`,
-`--amend`) and refuses, in this order, naming the files and the way out:
+gated there). The gate takes the files the commit would take: git's staged list always, whatever the command names,
+and the files a `--`, `-a` or `-i` form adds, and refuses, in this order, naming the files and the way out:
 1. **Right files only** (`file-not-in-card`). Every file must lie inside the Paths of the session's open card, or be
    always allowed: the card's own folder, the register, `<bundle.root>/ledger/` and `paths.exempt`. An empty Paths is
    no file rule; a session with no open card (none taken, or the card is not `open`) may commit only the always-allowed
    files. Way out: `git restore --staged <file>` (under `-a` or `--`, the text says how), or add the file to the card and
    ask the owner to `card open` it again.
-2. **Own changes only** (`ride-in-file`). A file this session never wrote is a ride-in from another session. What a
-   session wrote is recorded, one row per path, in `<state.dir>/touched.jsonl` by two recorder entries on the same
-   gate: `touched.edit` (Write, Edit, MultiEdit, NotebookEdit) and `touched.shell` (the paths the lock gate's reader
-   finds in a shell command; a glob is kept as a glob). A shell write whose target cannot be read is recorded as
-   `unresolved`, and then every file counts as written (the gate cannot tell which one was). A recorder that cannot
-   write its row warns `touch-record-failed`; the commit gate then refuses what it cannot show. The always-allowed
-   files are exempt. Way out: `git restore --staged <file>`, or leave the file out of the paths.
+2. **One builder per task root** (`take-root-busy`, in the lock gate). A ride-in comes from two builders sharing one
+   worktree and one index, so `card take` is refused while another session holds an open card in the same task root.
+   The refusal names the holding session (its first 8 characters) and its card; the way out is that the holder closes
+   or hands off its card, or that the builder works in its own worktree. The same session may take its own card
+   again. `mkway sessions` shows the root of each session. There is no record of who wrote a file: the gate judges
+   what the commit takes, and a script's own output inside the Paths commits.
 3. **No junk** (`junk-file-staged`), **no force-added ignored file** (`ignored-file-staged`): a new file that
    `git check-ignore` matches was added with `git add -f`; the ignore file is never overridden by a commit.
 4. **No data files** (`data-file-staged`, by extension) and **nothing too large** (`file-too-large`). The three keys of
@@ -389,11 +396,13 @@ gated there). The gate takes the files each form of the commit would stage (`-- 
    `.pytest_cache/`, `.pytest_tmp/`, `*.log`, `*.tmp`, `*.orig`, `*.rej`, `.DS_Store`, `Thumbs.db`; a name or glob
    matches at any depth, a trailing `/` names folders), `commit.data_patterns` (default `*.csv`, `*.tsv`, `*.xlsx`,
    `*.xls`, `*.parquet`, `*.db`, `*.sqlite`, `*.sqlite3`, `*.bak`, `*.dump`) and `commit.max_file_kb` (default `1024`).
+   (`commit.message_prefix` is not a gate key: it starts the message of install's own commit, MW-035.)
    Deleting such a file is never refused. Way out: unstage it, keep the data outside the repository, or ask the owner
    to change the key.
 5. **The message names the open card** (`commit-message-card`): the card's whole id, in the `ids.card_prefix` form, in
    a `-m`, a `-F -` here-document or a readable message file. On by default; `gates.commit_files.message_card.on` set
-   to `false` turns this rule off and nothing else.
+   to `false` turns this rule off and nothing else. The open card's own id counts whatever the prefix is now, and it
+   may stand anywhere in the first line (`#10536 CARD-002 text`).
 6. **A rule card goes in with its test** (`rule-without-test`), when the profile sets `rules.cards` and
    `rules.test_for`: see «Rule cards paired with tests» below.
 
@@ -401,12 +410,11 @@ The gate fails closed (`commit-unreadable`): a commit it cannot read (a folder f
 unknown option or git form, a message it cannot read, a git read that fails or times out) is refused, and so is a
 commit in a command that also runs a git subcommand that changes what is staged (`add`, `rm`, `mv`, `restore`,
 `reset`, ...): the hook reads the index before the command runs, so run that command in a call of its own, then the
-commit alone. A register that differs from its seal refuses `register-tampered`; the owner runs `card resync`.
+commit alone. A chained `git add ... && git commit ...` (or with `;`) is refused for this reason:
+run them as two separate calls. A register that differs from its seal refuses `register-tampered`; the owner runs `card resync`.
 
-Limits: a file written by a script the reader cannot follow (`python script.py`) leaves no row, so staging it is a
-ride-in: write it through the Write tool or a plain redirect; the ignore check is for new files, so an edit to a file
-already in the repository is not refused for it; the record is written before the write, so a write that then fails
-still counts as written; a guard against slips, not a wall (`engine/KEYS.md` lists the keys).
+Limits: the ignore check is for new files, so an edit to a file already in the repository is not refused for it; a
+guard against slips, not a wall (`engine/KEYS.md` lists the keys).
 
 ## Tests before a commit
 Tests before a commit, red test first, no red commit. The gate `commit_tests` (shell group, PreToolUse on Bash and
@@ -476,7 +484,7 @@ Profile line: `locks.targets: [{"name": "hold", "paths": ["**"], "open_by_defaul
 a built-in name with the flag is refused). Open until the owner runs, in their own terminal, `mkway hold` (a marker
 file); `mkway go` removes it; the long forms are `mkway lock close hold` and `mkway lock open hold`. Closed, it stops
 every session write and commit; it does not stop reading, answering, or a word in a message.
-The marker is in the shared state folder: a hold reaches every worktree of the repository.
+The marker is in the shared state folder; with `state.shared_dir` set, a hold reaches every worktree of the repository.
 
 ## Deletes
 A session's delete is read by one gate before it runs: `delete`, one manifest entry (shell group, `onFailure: block`, so
@@ -551,13 +559,12 @@ refused.
   (`write-target-unresolved`), reminded at the next prompt and counted on the start line. A glob write whose literal
   folder lies inside a closed target refuses; any other glob write is allowed, not logged. A lock-target path built
   without its literal is not seen (R43). What backs this up until MW-021: for the tracked targets (the profile, the
-  register, the bundle `.gitignore` and `.gitattributes`, `mkway.lock`) the commit check refuses a commit that carries
-  a change (`lock-closed-commit`), at commit time only; for `engine/`, `locks/`, the state folder and
-  `.claude/settings.local.json`, which are git-ignored, there is no commit check: only the owner's review and the OS
-  permissions remain.
+  register, the bundle `.gitignore` and `.gitattributes`, `mkway.lock`, and since MW-027 the engine copy and
+  `.claude/settings.json`) the commit check refuses a commit that carries a change (`lock-closed-commit`), at commit
+  time only; for `locks/`, the state folder and the owner's `.claude/settings.local.json` (git-ignored by Claude Code) there is no
+  commit check: only the owner's review and the OS permissions remain.
 - A Python write with a computed path that never names a target passes (logged `write-target-unresolved`), the same
-  class as `python script.py`. `engine/`, `locks/` and the state folder are git-ignored, so no commit check backs them
-  up (R44).
+  class as `python script.py`. `locks/` and the state folder are git-ignored, so no commit check backs them up (R44).
 - The git time limit is 10 s per git call, not per gate; one commit check can make up to six calls (B3; close-fix item
   19, not built).
 - The shell gate reads the command text only: a script file that runs an owner-only mkway command is not read by it,
@@ -576,17 +583,25 @@ refused.
   wall; the wall is the OS permission on the lock state, the profile and the install record (owner).
 
 ## Use in a task
+1. Make a worktree of the task's repository (or use the checkout you have) and open a terminal in the task folder.
+2. Install and commit in one step, in your own terminal: `python <engine repo>/mkway.py install --from <engine repo> [--ref <tag or sha>] [--shared <absolute folder>] --commit --root <task root>`. The commit takes only install's own paths, whatever else is staged; a profile that sets `commit.message_prefix` (for example `#10536`) starts the message with it.
+3. Commit: already done by `--commit`. Without it, install prints one line to paste (`git add .claude/settings.json mkway; git commit -m "mkway <version>: install" -- .claude/settings.json mkway`).
+4. Open the lead: start Claude Code in the task folder and register the lead (`python mkway/engine/mkway.py lead add`).
+5. Done: every worktree made from that commit has the copy and the hooks, with no install of its own.
 ```
-python <engine repo>/mkway.py install --from <engine repo> [--ref <tag or sha>] --root <task root>
 python mkway/engine/mkway.py check
 python mkway/engine/mkway.py card new "<title>"
 ```
 `install` copies the engine's fixed file set into `<task root>/mkway/engine/` (the bundle root is the profile's
 `bundle.root`, `mkway` by default) and writes `mkway/mkway.lock`, a starter `mkway/profile.json`, the folders `cards/`,
-`ledger/`, `locks/`, `state/`, and the hook entries into `.claude/settings.local.json`. Every hook entry runs
+`ledger/`, `locks/`, `state/`, a bundle `.gitignore` (state, locks, bytecode and check temp folders; the engine copy is
+tracked) and the hook entries into the committed `.claude/settings.json` (merged with what is there; a reinstall
+replaces only mkway's own entries and strips them from an older `.claude/settings.local.json`; a per-machine
+interpreter given with `--python` stays in `state/machine.json`). Every hook entry runs
 `python "${CLAUDE_PROJECT_DIR}/mkway/engine/mkway.py" hook <event> --group <group>`; the path is the same in this
 repository (the root launcher `mkway.py`) and in the copy. At each session start the dispatcher prints one start
 block: the version, the gates, the drift check and the logged errors.
+When the task folder sits below the repository top, run the commands from the task folder or pass `--root <task folder>`, and start Claude Code in the task folder (the hooks read `$CLAUDE_PROJECT_DIR`).
 Live check after install: open a card (`card open <id>` in your own terminal), then start a session; you should see
 the line «mkway: card changes since the owner's last re-seal: …» as a message, and the start block lists the same
 change. If the message does not show, the start block's line is the only route; report it (card MW-021: another

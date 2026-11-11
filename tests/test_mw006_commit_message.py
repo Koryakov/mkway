@@ -7,7 +7,7 @@ from _commit_fixture import check, make_task, reason, stage, touch, work
 from _engine import jsonl
 import dispatch
 
-REASONS = {"file-not-in-card", "ride-in-file", "junk-file-staged", "ignored-file-staged", "data-file-staged",
+REASONS = {"file-not-in-card", "junk-file-staged", "ignored-file-staged", "data-file-staged",
            "file-too-large", "commit-message-card", "commit-unreadable", "register-tampered",
            "rule-without-test"}  # changed by MW-021 (E6): the rule card needs its test
 

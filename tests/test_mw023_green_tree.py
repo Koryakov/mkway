@@ -5,6 +5,8 @@ The commit gate writes the `tree` of a `commit_tests.jsonl` row as the sha256 of
 import re
 from pathlib import Path
 
+import pytest
+
 from _commit_fixture import git, save
 from _engine import REPO, cli
 from _mw020 import built, deliverable, green, head, head_tree, index_digest, make_root, rows
@@ -96,6 +98,7 @@ def test_one_helper_serves_the_writer_and_every_reader():
     assert "tree_keys" in Path(gate_commit_tests.__file__).read_text(encoding="utf-8")
 
 
+@pytest.mark.engine_repo  # MW-025: the register and the changelog are not in an installed copy
 def test_the_register_changelog_and_card_name_the_card():
     """E6: `cards/REGISTER.md` has the MW-023 row, `## 0.2.0` of the changelog lists it, the card folder exists, and
     `VERSION` stays `0.2.0`. Catches: a fix that leaves the register and the changelog behind."""
@@ -104,4 +107,4 @@ def test_the_register_changelog_and_card_name_the_card():
     section = (REPO / "CHANGELOG.md").read_text(encoding="utf-8").split("## 0.2.0", 1)[1].split("## 0.1.0", 1)[0]
     assert "MW-023" in section
     assert list((REPO / "cards").glob("MW-023-*/CARD.md"))
-    assert (REPO / "VERSION").read_text(encoding="utf-8").strip() == "0.2.0"
+    assert (REPO / "VERSION").read_text(encoding="utf-8").strip() == "0.2.7"  # changed by MW-027: 0.2.7

@@ -48,10 +48,8 @@ def save(root, rel, text="x\n"):
 
 
 def touch(root, *rels, session="s1", tool="Write"):
-    """The recorder's rows for these paths, as the edit gate group writes them."""
-    import gate_commit
-    for rel in rels:
-        gate_call(gate_commit.touch, root, tool=tool, tool_input={"file_path": rel}, session=session)
+    """MW-034: the write record is gone, so this writes nothing; the calls stay in the older tests, which now pass
+    on the card's Paths alone."""
 
 
 def check(root, command, session="s1", tool="Bash", **payload):

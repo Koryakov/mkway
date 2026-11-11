@@ -3,6 +3,8 @@ scratch repositories under the pytest temp folder only; no test writes a tag in 
 import json
 import re
 
+import pytest
+
 from _engine import REPO, make_profile, write_profile
 from test_install import clean_env, git, make_source, make_task, mkway
 import install
@@ -33,7 +35,7 @@ def test_the_version_file_is_semver():
     """E1: `VERSION` at the root holds one semantic version, one line. Changed by MW-017 (E21): the number is `0.2.0`
     (the lead role adds commands and gates: a minor bump by the README's rule)."""
     text = (REPO / "VERSION").read_text(encoding="utf-8")
-    assert text.strip() == "0.2.0" and SEMVER.fullmatch(text.strip()) and len(text.splitlines()) == 1
+    assert text.strip() == "0.2.7" and SEMVER.fullmatch(text.strip()) and len(text.splitlines()) == 1
 
 
 def test_the_start_block_shows_the_copys_version(tmp_path):
@@ -116,6 +118,7 @@ def _register_rows():
     return rows
 
 
+@pytest.mark.engine_repo  # MW-025: the changelog and the register are not in an installed copy
 def test_the_changelog_covers_the_register():
     """E5: the top release heading is the `VERSION` text; each register card (every status: a register row exists once
     the card is in the tree) is one line with its id and its register title in exactly one release section, so the
@@ -134,6 +137,7 @@ def test_the_changelog_covers_the_register():
     assert len(lines) == len(rows)
 
 
+@pytest.mark.engine_repo  # MW-025: the README is not in an installed copy
 def test_the_readme_has_the_versioning_section():
     """E6: a `## Versioning` section: the three bump rules and the owner's tags."""
     text = (REPO / "README.md").read_text(encoding="utf-8")

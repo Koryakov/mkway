@@ -50,6 +50,7 @@ def test_a_lead_edit_of_any_other_path_is_lead_no_edit(world, tmp_path):
     the register; the text names the allowed paths and the owner's `mkway lead remove`. A path outside the repository
     is not this gate's. Edit, Write, MultiEdit and NotebookEdit alike."""
     root, mine, theirs = world
+    assert cli(root, "card", "open", mine)[0] == 0  # changed by MW-028: its card file is the lead's only while proposed
     card_file = row_of(root, mine)["folder"].strip("`") + "/CARD.md"
     for path in ("src/app.py", card_file, _order_path(root, theirs), "mkway/cards/REGISTER.md",
                  "mkway/asks/sub/deep.md.bak/../../../x.py"):

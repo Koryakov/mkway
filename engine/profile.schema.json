@@ -80,6 +80,22 @@
         }
       }
     },
+    "lock_gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "the git form reader of the lock gate (MW-031); every key has a default, so the object may be absent or empty",
+      "properties": {
+        "git_builtins_extra": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9._-]*$"
+          },
+          "description": "git built-in command names added to the engine list (`lock_gate.git_builtins` in defaults.json); `mkway check` shows the ones this git has and the list lacks as info; default none"
+        }
+      }
+    },
     "gates": {
       "type": "object",
       "description": "gate name (engine/manifest.json gate) -> switch; a mode is a nested object with its own switch",
@@ -190,6 +206,11 @@
         "dir": {
           "type": "string",
           "format": "relative-path"
+        },
+        "shared_dir": {
+          "type": "string",
+          "format": "absolute-path",
+          "description": "MW-026: opt-in. An absolute folder for the files that cross worktrees (leads.json, inbox/, sessions.jsonl, pings.jsonl, dead-letter.jsonl, lock markers). Unset: they live in the root's own state folder"
         }
       }
     },
@@ -483,6 +504,11 @@
           "type": "number",
           "exclusiveMinimum": 0,
           "description": "the largest file, in KB, a commit may hold; default 1024"
+        },
+        "message_prefix": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9#_.:/-]+$",
+          "description": "the start of the install commit message, for example #10536 (MW-035); no spaces or shell characters; default none"
         }
       }
     },
