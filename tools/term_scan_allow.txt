@@ -1,0 +1,3 @@
+# Term-scan exceptions (card MW-002, fix checks 3 M3 and 4 F1): one row per marked line, <path> TAB <group> TAB <reason>; two marked lines with the same reason need two rows.
+# A new row is a reviewed decision; list it in the card Log too.
+tests/_engine.py	B	cmd no-echo marker, not an NDA term

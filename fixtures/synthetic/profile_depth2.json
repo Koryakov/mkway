@@ -1,0 +1,19 @@
+{
+  "vcs": "git",
+  "bundle": {"root": "work/alpha"},
+  "gates": {
+    "session_start": {"on": true},
+    "own_files_stop": {"on": false},
+    "derived_files": {"edit": {"on": true}, "shell": {"on": false}}
+  },
+  "product_checks": [
+    {"event": "PostToolUse", "matcher": "Edit|Write", "command": "python work/alpha/checks/sample_check.py"}
+  ],
+  "ids": {"work_item": "^QX-[0-9]+$"},
+  "state": {"dir": "work/alpha/.state"},
+  "python": {"command": "python"},
+  "ledger": {},
+  "locks": {},
+  "handback": {},
+  "outbox": {}
+}

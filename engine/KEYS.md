@@ -1,0 +1,183 @@
+# Engine keys
+
+Two lists. **Profile keys**: the 75 draft keys of the branch profile, each «in schema now» (with the schema path it
+maps to) or «later (stays a knot)». **Engine defaults**: the 31 engine-default keys of the port map and one engine
+constant (`lock_gate.git_builtins`, MW-003), each in `defaults.json` or marked with the reason it is not.
+
+Notes:
+- «In schema now» = the keys slice 1 reads (bundle, items, gates, product checks, Python command, state folder, ids)
+  plus the one per-machine slot. The later groups `ledger`, `locks`, `handback`, `outbox` are declared optional and
+  empty in `profile.schema.json`.
+- The Q2 frame names «statuses» under `items`; no draft key holds it today, so it is not declared (no key is invented).
+
+## Profile keys (75)
+
+| # | Key | Verdict | Schema path | Reason |
+|---|---|---|---|---|
+| 1 | `test_roots` | in schema now | `test_roots` | the close rule and the gate `commit_tests` read the test folders: a commit whose staged files all lie in them may be red (the red-first commit), any other commit needs a green run there (MW-003, MW-005); default `["tests"]` |
+| 2 | `derived.root` | later (stays a knot) | - | derived-files gate; not slice 1 |
+| 3 | `derived.files` | later (stays a knot) | - | derived-files gate; the render marker is also hard-wired in three files today |
+| 4 | `card.id_pattern` | later (stays a knot) | - | the card layout is fixed in the engine until a second layout exists (MW-003, D-8) |
+| 5 | `card.path_glob` | later (stays a knot) | - | the card layout is fixed in the engine until a second layout exists (MW-003, D-8) |
+| 6 | `register.file` | later (stays a knot) | - | the register sits beside the cards; fixed in the engine (MW-003, D-8) |
+| 7 | `rule.short_pattern` | later (stays a knot) | - | text-matching pattern of the downstream gate |
+| 8 | `rule.in_text_pattern` | later (stays a knot) | - | text-matching pattern of the downstream gate |
+| 9 | `owner_edit.name_pattern` | later (stays a knot) | - | downstream gate configuration |
+| 10 | `owner_edit.dirs` | later (stays a knot) | - | downstream gate configuration |
+| 11 | `owner_edit.card_globs` | later (stays a knot) | - | downstream gate configuration |
+| 12 | `open.owner_pattern` | later (stays a knot) | - | a text-matching anchor in a config; downstream gate |
+| 13 | `open.count_pattern` | later (stays a knot) | - | a text-matching anchor in a config; downstream gate |
+| 14 | `downstream.kinds` | later (stays a knot) | - | downstream gate configuration |
+| 15 | `downstream.universe` | later (stays a knot) | - | downstream gate configuration |
+| 16 | `downstream.change_list` | later (stays a knot) | - | downstream gate configuration |
+| 17 | `downstream.checklist` | later (stays a knot) | - | downstream gate configuration |
+| 18 | `downstream.chain` | later (stays a knot) | - | downstream gate configuration |
+| 19 | `downstream.delivered` | later (stays a knot) | - | task data in form; downstream gate |
+| 20 | `downstream.vocabulary` | later (stays a knot) | - | holds word terms (task data in form); downstream gate |
+| 21 | `locks.record` | later (stays a knot) | - | the `locks` group stays empty until the lock hooks are ported |
+| 22 | `locks.names` | later (stays a knot) | - | the `locks` group stays empty until the lock hooks are ported |
+| 23 | `locks.marker` | later (stays a knot) | - | the `locks` group stays empty until the lock hooks are ported |
+| 24 | `outbox.dir` | later (stays a knot) | - | the `outbox` group stays empty until the outbox check is ported |
+| 25 | `outbox.id_patterns_file` | later (stays a knot) | - | the `outbox` group stays empty until the outbox check is ported |
+| 26 | `outbox.checkers` | later (stays a knot) | - | the `outbox` group stays empty until the outbox check is ported |
+| 27 | `plan.always` | later (stays a knot) | - | plan gate; not slice 1 |
+| 28 | `number_bases.bases` | later (stays a knot) | - | data of a product checker; no hook reads it |
+| 29 | `number_bases.shapes` | later (stays a knot) | - | data of a product checker; no hook reads it |
+| 30 | `customer_ids` | later (stays a knot) | - | a product's id patterns, named by the outbox check |
+| 31 | `decision_search.ledger` | later (stays a knot) | - | decision search tool; not slice 1 |
+| 32 | `decision_search.log_file` | later (stays a knot) | - | decision search tool; not slice 1 |
+| 33 | `decision_search.cache_dir` | later (stays a knot) | - | decision search tool; not slice 1 |
+| 34 | `decision_search.noise_paths` | later (stays a knot) | - | decision search tool; not slice 1 |
+| 35 | `decision_search.ledger_id_prefixes` | later (stays a knot) | - | decision search tool; may derive from `ids.decision_row` |
+| 36 | `decision_search.process_card` | later (stays a knot) | - | decision search tool; names a card (task data in form) |
+| 37 | `decision_search.standing` | later (stays a knot) | - | decision search tool; not slice 1 |
+| 38 | `decision_search.source_aliases` | later (stays a knot) | - | decision search tool; not slice 1 |
+| 39 | `delete.generated_state` | later (stays a knot) | - | the delete-list format becomes an engine contract first (R4(4)) |
+| 40 | `bundle.root` | in schema now | `bundle.root` | the root resolver reads it; any depth |
+| 41 | `registration.file` | later (stays a knot) | - | the install target is the owner's call (Q3); the installer is order 2 |
+| 42 | `ledger.file` | later (stays a knot) | - | the `ledger` group stays empty until a gate that reads it is ported |
+| 43 | `ledger.parts_dir` | later (stays a knot) | - | the `ledger` group stays empty until a gate that reads it is ported |
+| 44 | `state.dir` | in schema now | `state.dir` | slice 1 reads the state folder |
+| 45 | `knowledge.files` | in schema now | `knowledge.files` | `mkway search` reads the knowledge files after the ledger (MW-003, MW-008) |
+| 46 | `gates` | in schema now | `gates` | the install reads the switch per gate |
+| 47 | `product_checks` | in schema now | `product_checks` | the schema takes the branch's product checks; MW-005 makes `mkway install` register them (D-2) |
+| 48 | `python.command` | in schema now | `python.command` | every generated command starts with it |
+| 49 | `ids.decision_row` | in schema now | `ids.decision_row` | id forms are read by slice 1 (`ids.*`); `mkway ledger add` writes the next row id in this form (MW-008) |
+| 50 | `ids.rule_card` | in schema now | `ids.rule_card` | id forms are read by slice 1 (`ids.*`) |
+| 51 | `ids.work_item` | in schema now | `ids.work_item` | id forms are read by slice 1 (`ids.*`) |
+| 52 | `ids.evidence` | in schema now | `ids.evidence` | id forms are read by slice 1 (`ids.*`) |
+| 53 | `locks.open_files` | later (stays a knot) | - | the `locks` group stays empty until the lock hooks are ported |
+| 54 | `user.settings_paths` | later (stays a knot) | - | an engine default by judgment (the platform's own layout), not a profile key; under the user's home folder (R4) |
+| 55 | `user.protected_hooks` | in schema now | `user.protected_hooks` | the per-machine slot (R4(2)): optional, existence-checked, off by default |
+| 56 | `lock.rules.folder` | later (stays a knot) | - | target of a lock hook; not slice 1 |
+| 57 | `lock.rules.card_name_pattern` | later (stays a knot) | - | target of a lock hook; not slice 1 |
+| 58 | `lock.rules.guarded_files` | later (stays a knot) | - | target of a lock hook; not slice 1 |
+| 59 | `lock.rules.record_dirs` | later (stays a knot) | - | target of a lock hook; not slice 1 |
+| 60 | `lock.rules_code.folder` | later (stays a knot) | - | target of a lock hook; not slice 1 |
+| 61 | `lock.rules_code.whitelist_file` | later (stays a knot) | - | target of a lock hook; not slice 1 |
+| 62 | `lock.code.file` | later (stays a knot) | - | its gate is off today |
+| 63 | `freeze.pages` | later (stays a knot) | - | discussion freeze target; not slice 1 |
+| 64 | `freeze.folder_pattern` | later (stays a knot) | - | discussion freeze target; not slice 1 |
+| 65 | `handback.checkers` | later (stays a knot) | - | the `handback` group stays empty; its gate is off today |
+| 66 | `cards.path` | later (stays a knot) | - | a product file reader; not slice 1 |
+| 67 | `cards.before_switch` | later (stays a knot) | - | a product file reader; not slice 1 |
+| 68 | `rule_source.folders` | later (stays a knot) | - | a product adapter; not slice 1 |
+| 69 | `rule_source.branch_check_dir` | later (stays a knot) | - | a product adapter; not slice 1 |
+| 70 | `evidence.store` | later (stays a knot) | - | an adapter to untie first |
+| 71 | `evidence.adapter_path` | later (stays a knot) | - | an adapter to untie first |
+| 72 | `golden.cases_file` | later (stays a knot) | - | an adapter to untie first |
+| 73 | `golden.report` | later (stays a knot) | - | an adapter to untie first |
+| 74 | `golden.fields` | later (stays a knot) | - | an adapter to untie first |
+| 75 | `ledger.columns` | later (stays a knot) | - | the `ledger` group stays empty until a gate that reads it is ported |
+
+Split: 12 in schema now, 63 later (changed by MW-003).
+
+## Added keys (R8, 2026-11-09; MW-002, MW-003)
+
+Not in the map's 75. Verdicts: «in schema now» (with its schema path), «later (stays a knot)», «proposed» (not in the schema; no code reads it), «no key».
+
+| Key | Verdict | Schema path | Values | Reason |
+|---|---|---|---|---|
+| `vcs` | in schema now | `vcs` | `git` or `none`; required, no default | git is optional: with `none` every git step is off, and the start line says so (R8) |
+| `ids.card_prefix` | in schema now | `ids.card_prefix` | capital letters and digits; optional, no default; `mkway install` writes `CARD` into the starter profile | the prefix of `mkway card new` (R8) |
+| `gates.<name>.budget_seconds` | in schema now | `gates` | seconds (a number); the values stay «not established» until a gate needs one | the dispatcher passes it in `ctx` and logs `over-budget` (R11 point 4) |
+| `gates.trip.min_calls` | in schema now | `gates` | a whole number above 0; default `20` | the calls a form gate needs in the last 24 hours before it can trip into watch (MW-012); read under the name `trip` only |
+| `gates.trip.share` | in schema now | `gates` | a number above 0; default `0.34` | a form gate trips into watch when its refusals are more than this share of its calls in the last 24 hours (MW-012); `error` rows count as neither; read under the name `trip` only |
+| `cards.owner_moves` | in schema now | `cards.owner_moves` | statuses; default `["open","closed"]`; `[]` is the light mode | the moves only the owner's terminal may make (MW-003, R15 A1) |
+| `cards.approver` | in schema now | `cards.approver` | `owner-only` (the default) or `orderer`; an unknown value is profile-invalid | who closes a card for a session: `owner-only` the owner's terminal only; `orderer` the session that ordered it, when it is not the holder and the card's tests pass (MW-011); MW-008 adds `other-session` (MW-003) |
+| `register.columns` | in schema now | `register.columns` | five strings for id, title, status, paths, folder, and optionally a sixth for who ordered the card; default `Id`, `Title`, `Status`, `Paths`, `Folder`, and `Ordered by` as the sixth | the register's column names are profile strings; the sixth column is written when the profile names six columns, or `cards.approver` is `orderer`, or the register already has it (MW-003, R18; MW-011) |
+| `locks.targets` | in schema now | `locks.targets` | a list of `{name, paths}`; paths are repo paths or globs; default none beside the built-in targets | the profile's own lock targets, closed until the owner's `mkway lock open` (MW-003) |
+| `paths.docs` | in schema now | `paths.docs` | globs; default `<bundle.root>/cards/**`, `<bundle.root>/ledger/**`, `*.md` | a commit holding only these paths runs no tests: the gate `commit_tests` reads it (MW-003, MW-005) |
+| `paths.exempt` | in schema now | `paths.exempt` | globs; default none | paths the subtask gate always allows (MW-003) |
+| `test_env` | in schema now | `test_env` | environment variable names; default none (`ENGINE_TERMS_FILE` always passes) | passed to the test run of the gate `commit_tests`; nothing else of the session's environment reaches the run (MW-003, MW-005) |
+| `questions.files` | in schema now | `questions.files` | globs; default none | a write to a question file needs a search record, like `AskUserQuestion` (MW-003); the gate `search` reads it (MW-008) |
+| `owner_ask.dir` | in schema now | `owner_ask.dir` | a repo-relative folder; default `<bundle.root>/asks` | the folder of the ask files `<name>_ask.md`; the edit gate needs `<name>_sources.md` beside each (MW-007) |
+| `owner_ask.markers` | in schema now | `owner_ask.markers` | non-empty list of strings; default one marker, `Request:` | a final reply with a line that starts with a marker (after spaces and an optional `**`) must have written an ask file in the turn; the marker is config, never a word in the code (MW-007) |
+| `owner_ask.sources` | in schema now | `owner_ask.sources` | non-empty list of names, no space and no colon; default one name, `ledger` | each name is a count line `<source>: N contradictions` and at least one quote line `> <source>: <verbatim>` of a `kind: substance` sources file (MW-007); the name `ledger` has its own lines: `ledger: N hits` and a `> ledger: <verbatim>` line, or `ledger: 0 hits` and `search: <record id>` (MW-008) |
+| `owner_ask.max_open` | in schema now | `owner_ask.max_open` | a whole number from 1; default `1` | how many asks with `status: open` one session may have; a new ask file while the session has that many is refused `ask-already-open`: add to the open ask, or wait (MW-014) |
+| `owner_ask.tool_allowed` | in schema now | `owner_ask.tool_allowed` | `true` or `false`; default `false` | `false`: the pop-up question tool `AskUserQuestion` is refused `ask-tool-off` and the text names the file route; `true`: the gate allows it, and the search gate still judges it (MW-014) |
+| `notify.command` | in schema now | `notify.command` | a command line with the placeholders `{file}` (the ask file) and `{line}` (the question, the default and the deadline); default none: nothing runs | run after an ask file is written, read by the engine and never by a shell, 10 seconds at most; a failure is logged `notify-failed` and never blocks; the engine ships no channel (MW-014) |
+| `agents.cap_minutes` | in schema now | `agents.cap_minutes` | minutes, a number above 0; default 30 | the start block lists each agent of the session that ran longer, or has a start row with no end row (MW-004) |
+| `commit.junk` | in schema now | `commit.junk` | non-empty list of patterns; a name or glob matches at any depth, a trailing `/` names a folder; default `__pycache__/`, `*.pyc`, `.pytest_cache/`, `.pytest_tmp/`, `*.log`, `*.tmp`, `*.orig`, `*.rej`, `.DS_Store`, `Thumbs.db` | files a commit never holds: `junk-file-staged` (MW-006) |
+| `commit.data_patterns` | in schema now | `commit.data_patterns` | non-empty list of patterns, by extension; default `*.csv`, `*.tsv`, `*.xlsx`, `*.xls`, `*.parquet`, `*.db`, `*.sqlite`, `*.sqlite3`, `*.bak`, `*.dump` | data files a commit never holds, whatever `.gitignore` says: `data-file-staged` (MW-006) |
+| `commit.max_file_kb` | in schema now | `commit.max_file_kb` | a number above 0; default `1024` | the largest file, in KB, a commit may hold: `file-too-large` (MW-006) |
+| `tests.command` | in schema now | `tests.command` | the whole command line of the run, roots included; its first word is the profile's Python (the engine runs only git and the configured Python); default `python -m pytest -q` followed by the `test_roots` | the gate `commit_tests` runs it in the exported staged tree before a session's commit (MW-005) |
+| `gates.commit_tests.budget_seconds` | in schema now | `gates` | seconds (a number above 0); default `780`; the manifest hook timeout is 900, so a run is stopped at 840 s at most | a run over it refuses the commit (`commit-tests-over-budget`); the owner raises it in the profile in their own terminal (MW-005) |
+| `delete.max_backup_mb` | in schema now | `delete.max_backup_mb` | a number above 0; default `5120` | the largest backup, in MB, a delete may make before it runs; above it the delete is refused `delete-too-large` (MW-009) |
+| `delete.sql_allowed` | in schema now | `delete.sql_allowed` | a boolean; default `false` | `true` turns off the refusal of destructive SQL `delete-sql`, for a task with a scratch database (MW-009) |
+| `bundle.track_copy` | proposed | - | `true` or `false`; `false` would keep today's behaviour | tracking the engine copy is the owner's call per project (R9); with `true`, `mkway install` would leave `engine/` out of the bundle's ignore lines. Proposed by the MW-002 order; not built |
+| profile location | no key | - | by convention `<root>/mkway/profile.json`, or `--profile <path>` (a relative path is read from the root) | no profile key holds the profile's location (MW-002 closes the earlier «not established») |
+
+Defaults the dispatcher falls back to when the profile is missing or its value is unusable: `bundle.root` = `mkway`,
+`state.dir` = `mkway/state`. Both keys stay required in the schema; `mkway install` writes these values into the
+starter profile. The engine copy is `<root>/<bundle.root>/engine/`.
+
+Decided (R64, 10.11): while the profile is invalid, every edit and shell call of a session is refused; the refusal
+carries the schema error (key path and message) so the session can tell the owner exactly what to fix; the owner fixes
+it in their editor or terminal, where no hook runs; `mkway check` prints the same error. The profile file has no
+exemption: it is a built-in lock target. Every engine writer of the profile validates its result before it replaces
+the file (card MW-003, C53).
+
+## Engine defaults (31)
+
+Values read at the pin on 2026-11-09 (the read form was allowed by the owner). A value that is a host name, a
+path or folder name of the source task, a product name or natural-language text is not copied: it stays later.
+
+A defaults.json key that is not in the schema is an engine constant: the profile cannot set it, and `profile-invalid` names such an attempt (R12 point 4, retro-chief10, 09.11).
+
+| Config | Key | Verdict | Reason |
+|---|---|---|---|
+| `bash_speed_guard` | `marker` | later (names a process-rule id of the source task) | the value's prefix is the source's rule id; a neutral marker is the engine's choice when the speed guard is ported |
+| `bash_speed_guard` | `sleep_limit_seconds` | in defaults.json | read at the pin |
+| `quality_gate` | `operators` | in defaults.json | read at the pin |
+| `quality_gate` | `compare` | in defaults.json | read at the pin |
+| `quality_gate` | `max_mutants` | in defaults.json | read at the pin |
+| `quality_gate` | `budget_seconds` | in defaults.json | read at the pin |
+| `quality_gate` | `workers` | in defaults.json | read at the pin |
+| `quality_gate` | `cpu_reserve` | in defaults.json | read at the pin |
+| `quality_gate` | `temp_dir` | in defaults.json | read at the pin |
+| `quality_gate` | `max_equivalent` | in defaults.json | read at the pin |
+| `quality_gate` | `mutant_timeout_min` | in defaults.json | read at the pin |
+| `quality_gate` | `mutant_timeout_factor` | in defaults.json | read at the pin |
+| `quality_gate` | `listed_max` | in defaults.json | read at the pin |
+| `quality_gate` | `equivalent_prefix` | in defaults.json | read at the pin |
+| `quality_gate` | `acceptance_heading` | in defaults.json | read at the pin; names the `Acceptance examples` heading of the one-page card form, which the engine template now is (R12); nothing reads it in MW-001 (`quality_gate` is off-today) |
+| `st_tests` | `budget_seconds` | in defaults.json | read at the pin |
+| `st_tests` | `startup_margin_seconds` | in defaults.json | read at the pin |
+| `st_tests` | `shared_run_max_cmdline` | in defaults.json | read at the pin |
+| `outbox_check` | `check_suffix` | in defaults.json | read at the pin |
+| `outbox_check` | `artifact_hosts` | later (a host name; needs an owner read) | the value is a host name, which the NDA list excludes |
+| `outbox_check` | `write_tools` | in defaults.json | read at the pin; the platform's tool names |
+| `outbox_check` | `shell_tools` | in defaults.json | read at the pin; the platform's tool names |
+| `outbox_check` | `lines` | in defaults.json | read at the pin; the check-file line format |
+| `decision_search` | `log_env` | in defaults.json | read at the pin |
+| `decision_search` | `cache_env` | in defaults.json | read at the pin |
+| `decision_search` | `noise_dir_names` | later (folder names of the source task) | the list names data folders of the source task |
+| `decision_search` | `noise_files` | later (file paths of the source task) | the list names files of the source task's bundle |
+| `decision_search` | `noise_suffixes` | later (names a database product; needs an owner read) | one suffix is a database product's name |
+| `decision_search` | `formats` | in defaults.json | read at the pin; the ledger and record-key format |
+| `decision_search` | `language` | later (natural-language content; needs an owner read) | natural-language text at the pin; never copied |
+| `decision_search` | `texts` | later (natural-language content; needs an owner read) | natural-language text at the pin; never copied |
+| `lock_gate` | `git_builtins` | in defaults.json | an engine constant (MW-003 close-fix 8, R90), not from the port map: git's built-in commands; a subcommand not in it refuses `command-unparsed`. «unverified»: written from knowledge, because `git --list-cmds=builtins` and `git help -a` were refused in the building session; `mkway check` compares it with `git --list-cmds=builtins` in the owner's terminal and warns on a difference |
+
+Split: 25 in `defaults.json`, 7 later, 0 not established.

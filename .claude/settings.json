@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(git push:*)",
+      "Bash(git remote:*)",
+      "Bash(git config --global:*)",
+      "Bash(git worktree:*)",
+      "Bash(git submodule:*)",
+      "Bash(git stash:*)",
+      "Bash(pip:*)",
+      "Bash(python -m pip:*)",
+      "Bash(py -m pip:*)",
+      "Bash(rm:*)"
+    ]
+  }
+}

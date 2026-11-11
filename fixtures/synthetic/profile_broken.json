@@ -1,0 +1,11 @@
+{
+  "bundle": {"root": "../outside"},
+  "items": {
+    "register_file": "cards/REGISTER.md",
+    "card_path_glob": "cards/*/CARD.md",
+    "card_id_pattern": "(unclosed"
+  },
+  "gates": {"session_start": {"on": "yes"}},
+  "state": {"dir": ".state"},
+  "ledger": {"file": "ledger.md"}
+}

@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.pytest_tmp/
+# Machine layer: generated registration and per-machine values never ship.
+.claude/settings.local.json

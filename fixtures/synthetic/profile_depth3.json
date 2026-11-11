@@ -1,0 +1,13 @@
+{
+  "vcs": "none",
+  "bundle": {"root": "src/beta/gamma"},
+  "gates": {
+    "commit_check": {"on": true},
+    "outbox_check": {"pre": {"on": true}, "stop": {"on": true}}
+  },
+  "product_checks": [],
+  "ids": {"rule_card": "^K[0-9]{2}$", "evidence": "^EV-[0-9]{4}$"},
+  "state": {"dir": "src/beta/gamma/state"},
+  "python": {"command": "py -3"},
+  "user": {"protected_hooks": ["hooks/sample_guard.py"]}
+}

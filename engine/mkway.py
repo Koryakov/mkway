@@ -1,0 +1,629 @@
+"""mkway command line (card MW-002; card MW-003).
+
+    mkway.py hook <event> --group <name> [--root <path>] [--profile <path>]
+    mkway.py install --from <engine repo> [--ref <sha or tag>] [--vcs git|none] [--python <command>]
+                     [--root <path>] [--profile <path>]
+    mkway.py check [--root <path>] [--profile <path>]
+    mkway.py card new <title> | list | resync [--add-ordered-by] | take <id> | release <id> [--force] | open <id>
+                  | close <id> | set <id> open|waiting|closed
+    mkway.py give <card> <who>      the owner's: who ordered a card (a session id prefix, or `owner`; card MW-011)
+    mkway.py sessions               the owner's view: every session id seen, its card, the cards it ordered
+    mkway.py lock open <name> [--minutes N] | close <name> [--minutes N, ignored] | list
+    mkway.py gate off <name> | on <name> | watch <name>   (watch: a form gate only; `on` ends it; card MW-012)
+    mkway.py delete --list <file>
+    mkway.py trash list | empty --older-than <days>
+    mkway.py ledger add --card <id> --topic <text> (--quote <verbatim> | --quote-file <path>) --source <text>
+                        [--status <text>] [--by <text>]     (topic: plain words, letters, digits, spaces, dashes)
+    mkway.py search <words>...
+    mkway.py asks                   the board of the ask files (MW-014)
+
+Run it through the root launcher `mkway.py`: in the engine repository and in a task's copy alike the path is
+`mkway/engine/mkway.py` under the task root (decision C12). The root is `--root`, else `$CLAUDE_PROJECT_DIR`,
+else the top of the git work tree; never the engine's own folder. Exit codes and output of `hook` follow Claude
+Code's documented hook contract (dispatch.render). A crash there follows the group rule of R13c: exit 2 in `edit`
+and `shell`, exit 0 in every other group; the root launcher applies the same rule to start-up failures.
+
+Who runs a command (card MW-003, C44): a session's shell carries `CLAUDECODE`; the owner's own terminal does not.
+A session's successful card or search command prints `mkway-ok <kind> <value> <nonce>` for the `post` group, which
+records it with the session id; an owner's command appends its own `by: owner` record. The owner-only commands
+(lock, gate, install, upgrade, give, card open / close / resync, release --force; with `cards.approver: orderer` a
+session's `card close` is the orderer's, checked by the lock gate and the CLI) are refused to a session by the lock
+gate before they run, and by this CLI itself when `CLAUDECODE` is present (close-fix 1, a tripwire: a session can
+strip it); the owner's way out is their own terminal, where no hook runs (decision 4).
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+from pathlib import Path
+
+_HERE = str(Path(__file__).resolve().parent)  # the engine's own modules; never the task root
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
+import asks  # noqa: E402
+import cardtool  # noqa: E402
+import dispatch  # noqa: E402
+import gatemode  # noqa: E402
+import install  # noqa: E402
+import ledger  # noqa: E402
+import locks  # noqa: E402
+import logs  # noqa: E402
+import paths  # noqa: E402
+import profiles  # noqa: E402
+import records  # noqa: E402
+import register  # noqa: E402
+import search  # noqa: E402
+import trash  # noqa: E402
+
+
+def _place(parser):
+    parser.add_argument("--root")
+    parser.add_argument("--profile")
+
+
+class _Parser(argparse.ArgumentParser):
+    """No abbreviated long options on any parser (close-fix 8, A-M1): `add_subparsers` builds every subparser with
+    the parser's own class, so `--prof` is never taken for `--profile`."""
+
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault("allow_abbrev", False)
+        super().__init__(*args, **kwargs)
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = _Parser(prog="mkway")
+    sub = parser.add_subparsers(dest="command", required=True)
+    hook = sub.add_parser("hook", help="run the gates of one event and group (called by Claude Code)")
+    hook.add_argument("event")
+    hook.add_argument("--group", required=True)
+    _place(hook)
+    inst = sub.add_parser("install", help="copy the engine into a task root and generate its hook entries")
+    inst.add_argument("--from", dest="source", required=True)
+    inst.add_argument("--ref")
+    inst.add_argument("--vcs", choices=("git", "none"))
+    inst.add_argument("--python", help="per-machine interpreter command, written into the local settings only")
+    _place(inst)
+    chk = sub.add_parser("check", help="compare the copy with its lock, run its tests and the term scan")
+    _place(chk)
+    card = sub.add_parser("card", help="the cards tool")
+    card_sub = card.add_subparsers(dest="card_command", required=True)
+    new = card_sub.add_parser("new")
+    new.add_argument("title", nargs="+")
+    _place(new)
+    lst = card_sub.add_parser("list")
+    _place(lst)
+    resync = card_sub.add_parser("resync", help="the owner's: show the register diff and rewrite its seal")
+    resync.add_argument("--add-ordered-by", action="store_true",
+                        help="the owner's: also add the `Ordered by` column to a register that has none")
+    _place(resync)
+    for name in ("take", "open", "close"):
+        one = card_sub.add_parser(name, allow_abbrev=False)
+        one.add_argument("card_id")
+        _place(one)
+    rel = card_sub.add_parser("release", allow_abbrev=False)
+    rel.add_argument("card_id")
+    rel.add_argument("--force", action="store_true", help="the owner's: free a card another session holds")
+    _place(rel)
+    cset = card_sub.add_parser("set", allow_abbrev=False)
+    cset.add_argument("card_id")
+    cset.add_argument("status")
+    _place(cset)
+    give = sub.add_parser("give", help="the owner's: set who ordered a card (a session id prefix, or `owner`)")
+    give.add_argument("card_id", help="a card id, or a bare number that takes the profile's card prefix")
+    give.add_argument("who", help="a prefix of one session id seen in the state records, or `owner`")
+    _place(give)
+    sess = sub.add_parser("sessions", help="the owner's view: every session id seen, with its card and its orders")
+    _place(sess)
+    gate_p = sub.add_parser("gate", help="the owner's switch of one gate in the profile")
+    gate_sub = gate_p.add_subparsers(dest="gate_command", required=True)
+    for name in ("off", "on", "watch"):  # `watch` (MW-012): a form gate still runs but never blocks; `on` ends it
+        g = gate_sub.add_parser(name)
+        g.add_argument("name")
+        _place(g)
+    lock = sub.add_parser("lock", help="the owner's lock files")
+    lock_sub = lock.add_subparsers(dest="lock_command", required=True)
+    lopen = lock_sub.add_parser("open")
+    lopen.add_argument("name")
+    lopen.add_argument("--minutes", type=float, default=60)
+    _place(lopen)
+    lclose = lock_sub.add_parser("close")
+    lclose.add_argument("name")
+    lclose.add_argument("--minutes", type=float, default=60)  # ignored: a close has no end (the owner hold, MW-010)
+    _place(lclose)
+    llist = lock_sub.add_parser("list")
+    _place(llist)
+    for word, text in (("hold", "the owner's: `lock close hold`"), ("go", "the owner's: `lock open hold`")):
+        _place(sub.add_parser(word, help=text))  # the short forms (MW-010, R123)
+    led = sub.add_parser("ledger", help="the decision ledger")
+    led_sub = led.add_subparsers(dest="ledger_command", required=True)
+    ladd = led_sub.add_parser("add", help="append one row: today's date, the next id, the owner's words verbatim")
+    ladd.add_argument("--card", required=True, type=_text)
+    ladd.add_argument("--topic", required=True, type=_text,
+                      help="plain words: letters, digits, spaces and dashes")
+    quote = ladd.add_mutually_exclusive_group(required=True)
+    quote.add_argument("--quote", type=_text, help="a plain quote, as the owner wrote it")
+    quote.add_argument("--quote-file", dest="quote", type=_quote_file, metavar="PATH",
+                       help="a file with the verbatim quote (e.g. <bundle.root>/ledger/quote.txt); one trailing "
+                            "line break is stripped; the file is not deleted")
+    ladd.add_argument("--source", required=True, type=_text)
+    ladd.add_argument("--status", default=ledger.IN_FORCE, type=_status)
+    ladd.add_argument("--by", type=_status, help="who wrote the row; default `session:<session id>`; `owner` only "
+                                                 "from the owner's terminal")
+    _place(ladd)
+    board = sub.add_parser("asks", help="the board of the ask files: id, card, age, deadline, default, status, blocked")
+    _place(board)
+    ask_p = sub.add_parser("ask", help="a session's commands on its ask: take the default, or record the answer")
+    ask_sub = ask_p.add_subparsers(dest="ask_command", required=True)
+    adef = ask_sub.add_parser("default", help="reversible ask past its deadline: take the default, ledger row")
+    adef.add_argument("ask_id")
+    _place(adef)
+    aans = ask_sub.add_parser("answered", help="the owner answered: status answered, ledger row with the owner's words")
+    aans.add_argument("ask_id")
+    aquote = aans.add_mutually_exclusive_group(required=True)
+    aquote.add_argument("--quote", type=_text, help="a plain quote, as the owner wrote it")
+    aquote.add_argument("--quote-file", dest="quote", type=_quote_file, metavar="PATH",
+                        help="a file with the verbatim quote; one trailing line break is stripped")
+    _place(aans)
+    srch = sub.add_parser("search", help="search the ledger and the knowledge files before asking the owner")
+    srch.add_argument("words", nargs="+", type=_text)
+    _place(srch)
+    dele = sub.add_parser("delete", help="delete exact repo paths from a list file: backed up, recorded")
+    dele.add_argument("--list", dest="list_file", required=True, help="a file with one exact repo path per line")
+    _place(dele)
+    trash_p = sub.add_parser("trash", help="the owner's view of the backups of deletes")
+    trash_sub = trash_p.add_subparsers(dest="trash_command", required=True)
+    tlist = trash_sub.add_parser("list")
+    _place(tlist)
+    tempty = trash_sub.add_parser("empty")
+    tempty.add_argument("--older-than", dest="older_than", type=float, required=True, help="days")
+    _place(tempty)
+    return parser
+
+
+def _text(value: str) -> str:
+    """A ledger argument: at least one character that is not white space (a usage error otherwise)."""
+    if not value.strip():
+        raise argparse.ArgumentTypeError("it must not be empty")
+    return value
+
+
+def _quote_file(value: str) -> str:
+    """`--quote-file <path>`: the file's text, one trailing line break stripped; an unreadable or empty file is a usage
+    error."""
+    try:
+        text = ledger.quote_from_file(value)
+    except OSError as exc:
+        raise argparse.ArgumentTypeError(f"cannot read the quote file ({exc.__class__.__name__})")
+    return _text(text)
+
+
+def _status(value: str) -> str:
+    """A ledger status: one line, no pipe (it is a table cell)."""
+    if not value.strip() or "|" in value or "\n" in value or "\r" in value:
+        raise argparse.ArgumentTypeError("it must be one non-empty line with no `|`")
+    return value.strip()
+
+
+def _read_stdin() -> str:
+    data = sys.stdin.buffer.read() if hasattr(sys.stdin, "buffer") else sys.stdin.read().encode("utf-8")
+    return data.decode("utf-8", errors="replace")
+
+
+def _fail(message: str) -> int:
+    sys.stderr.write(f"mkway: {message}\n")
+    return 1
+
+
+class Run:
+    """One command run: the root, the profile, and who runs it."""
+
+    def __init__(self, root: Path, profile, env):
+        self.root = root
+        self.profile = profile
+        self.session = records.SESSION_ENV in env
+        self.state = profiles.state_dir(root, profile)
+
+    def done(self, kind: str, value: str) -> None:
+        """Record a successful command: a session's through the `post` group, the owner's here (deliverable 2)."""
+        if self.session:
+            nonce = records.issue(self.state, kind, value)
+            print(f"mkway-ok {kind} {value} {nonce}")
+        else:
+            records.append(self.state, None, kind, value, by="owner")
+
+    def refusal(self, reason: str, target=None) -> None:
+        try:
+            logs.write_refusal(self.state, logs.row(session=None, event="command", tool=None, gate="cards",
+                                                    reason_id=reason, target=target, kind="refuse"))
+        except OSError:
+            pass
+
+
+IN_SESSION = "run it in your own terminal, not inside a Claude chat"
+HOLD_WORDS = {"hold": "close", "go": "open"}  # the short forms of `lock close hold` and `lock open hold` (R123)
+HOLD_TARGET = "hold"
+
+
+def _owner_only(args, profile=None, root=None):
+    """The owner-only command `args` names, or None (close-fix 1, A-M5, R37 (a) H4): the same list and the same
+    `cards.owner_moves` rule as the lock gate's `owner-only-command`. `card open|close|set` need the profile; without
+    it they are not judged here. The holder's `card set <id> open` of a `waiting` card passes, as in the gate
+    (R19c); the gate checks the holder."""
+    command = args.command
+    if command == "install":
+        return "install"
+    if command == "lock" and args.lock_command in ("open", "close"):
+        return f"lock {args.lock_command}"
+    if command in HOLD_WORDS:
+        return command
+    if command == "gate":
+        return f"gate {args.gate_command}"
+    if command == "give":
+        return "give"
+    if command == "trash":  # MW-009: a session never reads or empties the backups of its own deletes
+        return f"trash {args.trash_command}"
+    if command != "card":
+        return None
+    sub = args.card_command
+    if sub == "resync":
+        return "card resync"
+    if sub == "release":
+        return "card release --force" if args.force else None
+    if sub not in ("open", "close", "set") or profile is None:
+        return None
+    if cardtool.approver(profile) == "orderer":  # MW-011: a session's close is the orderer's, decided in `_move`;
+        if sub == "close":                      # `card set <id> closed` stays the owner's: no second door
+            return None
+        if sub == "set" and args.status == "closed":
+            return "card set closed"
+    status = {"open": "open", "close": "closed"}.get(sub) or args.status
+    if status not in cardtool.owner_moves(profile):
+        return None
+    if sub == "set" and status == "open":
+        try:  # the sealed register's status, as the gate reads it
+            register.check(root, profile)
+            row = register.find(register.read(root, profile), args.card_id)
+        except (OSError, register.RegisterError):
+            row = None
+        if row and row.get("status") == "waiting":
+            return None
+    return f"card set {status}" if sub == "set" else f"card {sub}"
+
+
+def _refuse_in_session(what: str) -> int:
+    return _fail(f"owner-only-command: `mkway {what}` is the owner's command; {IN_SESSION}")
+
+
+def main(argv=None, env=None) -> int:
+    env = os.environ if env is None else env
+    args = _parser().parse_args(argv)
+    session = records.SESSION_ENV in env  # present with any value, the empty value included
+    if session and _owner_only(args):
+        return _refuse_in_session(_owner_only(args))
+    if args.command == "hook":
+        result = dispatch.run(args.event, args.group, _read_stdin(), root_arg=args.root, profile_arg=args.profile)
+        if result.stdout:
+            sys.stdout.write(result.stdout)
+        if result.stderr:
+            sys.stderr.write(result.stderr)
+        return result.exit_code
+    try:
+        root = paths.find_root(env=env, root_arg=args.root, vcs=getattr(args, "vcs", None))
+    except paths.RootNotFound as exc:
+        return _fail(str(exc))
+    if args.command == "install":
+        try:
+            report = install.install(root, Path(args.source), ref=args.ref, profile_arg=args.profile, vcs=args.vcs,
+                                     python=args.python)
+        except install.InstallError as exc:
+            return _fail(str(exc))
+        print("\n".join(report))
+        return 0
+    if args.command == "check":
+        code, lines = install.check(root, profile_arg=args.profile)
+        print("\n".join(lines))
+        return code
+    profile, _errors = profiles.load(paths.profile_path(root, args.profile))
+    if args.command == "search":  # MW-008: no profile and no ledger still leave a record (0 hits)
+        return _search(root, profile if isinstance(profile, dict) else {}, args, env, session)
+    if profile is None:
+        return _fail("the profile cannot be read: " + "; ".join(_errors))
+    if session and _owner_only(args, profile, root):
+        return _refuse_in_session(_owner_only(args, profile, root))
+    if args.command in HOLD_WORDS:
+        if HOLD_TARGET not in locks.default_open_names(root, profile):
+            return _fail(f"no hold target: the profile has no lock target named `{HOLD_TARGET}` that is open by "
+                         f"default. Add to the profile: locks.targets: [{{\"name\": \"{HOLD_TARGET}\", \"paths\": "
+                         f"[\"**\"], \"open_by_default\": true}}]")
+        args.lock_command, args.command, args.name, args.minutes = HOLD_WORDS[args.command], "lock", HOLD_TARGET, 60
+    run = Run(root, profile, env)
+    run.profile_file = paths.profile_path(root, args.profile)
+    try:
+        if args.command == "delete":
+            return _delete(run, args)
+        if args.command == "trash":
+            return _trash(run, args)
+        if args.command == "lock":
+            return _lock(run, args)
+        if args.command == "gate":
+            return _gate(run, args)
+        if args.command == "ledger":
+            return _ledger(run, args)
+        if args.command == "give":
+            return _give(run, args)
+        if args.command == "sessions":
+            return _sessions(run)
+        if args.command == "ask":
+            return _ask(run, args)
+        if args.command == "asks":
+            print(chr(10).join(asks.board_lines(run.root, run.profile)))
+            return 0
+        return _card(run, args)
+    except register.RegisterError as exc:
+        run.refusal(exc.reason)
+        return _fail(f"{exc.reason}: {exc.message}")
+    except cardtool.CardError as exc:
+        if exc.reason != "card-error":
+            run.refusal(exc.reason)
+            return _fail(f"{exc.reason}: {exc}")
+        return _fail(str(exc))
+    except locks.LockError as exc:
+        return _fail(str(exc))
+
+
+def _delete(run: Run, args) -> int:
+    """`delete --list <file>` (MW-009): a session's command, never owner-only; the gate passes it. Any bad line of the
+    list deletes nothing. The CLI knows no session id, so the record row says `by` instead."""
+    try:
+        text = Path(args.list_file).read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeError) as exc:
+        return _fail(f"the list file cannot be read ({exc.__class__.__name__})")
+    code, lines = trash.delete_list(run.root, run.profile, run.profile_file, text,
+                                    max_mb=profiles.delete_settings(run.profile)["max_backup_mb"],
+                                    by="session" if run.session else "owner")
+    if code:
+        for line in lines:
+            sys.stderr.write(f"mkway: {line}\n")
+        return code
+    print("\n".join(lines))
+    return 0
+
+
+def _trash(run: Run, args) -> int:
+    """`trash list` and `trash empty --older-than <days>` (MW-009): the owner's, refused to a session before this."""
+    if args.trash_command == "list":
+        print("\n".join(trash.listing(run.root, run.state)))
+        return 0
+    if args.older_than < 0:
+        return _fail("--older-than takes a number of days, not below 0")
+    try:
+        removed, freed = trash.empty(run.root, run.state, args.older_than)
+    except (OSError, trash.BackupError) as exc:
+        return _fail(f"the trash could not be emptied ({getattr(exc, 'message', exc.__class__.__name__)})")
+    print(f"removed {len(removed)} folder(s), {freed / trash.MB:.2f} MB freed")
+    return 0
+
+
+def _lock(run: Run, args) -> int:
+    if args.lock_command == "list":
+        for name, until in locks.open_locks(run.root, run.profile):
+            print(f"{name} open until {until}")
+        for line in locks.hold_lines(run.root, run.profile):
+            print(line)
+        return 0
+    data = locks.set_lock(run.root, run.profile, args.name, "open" if args.lock_command == "open" else "closed",
+                          minutes=getattr(args, "minutes", 60))
+    if args.name in locks.default_open_names(run.root, run.profile):
+        print(f"lock {data['name']} {data['state']} (hold by the owner; no end time)")
+    else:
+        print(f"lock {data['name']} {data['state']} until {data['until']}")
+    return 0
+
+
+def _search(root: Path, profile: dict, args, env, session: bool) -> int:
+    """`search <words>` (MW-008): print the hits, append the record; a session's run then prints the `mkway-ok` line
+    the `post` group turns into that session's `search` record."""
+    try:
+        lines, row = search.run(root, profile, args.words, env)
+    except OSError as exc:
+        return _fail(f"the search record was not written ({exc.__class__.__name__}); a question needs it")
+    print("\n".join(lines))
+    Run(root, profile, env).done("search", row["id"])
+    return 0
+
+
+def _ask_log(run: Run, reason: str, ask_id: str, kind: str) -> None:
+    try:
+        logs.write_refusal(run.state, logs.row(session=None, event="command", tool=None, gate="owner_ask",
+                                               reason_id=reason, target=ask_id, kind=kind))
+    except OSError:
+        pass
+
+
+def _ask(run: Run, args) -> int:
+    """`ask default <id>` and `ask answered <id>` (MW-014): a session's commands, never owner-only. The refusal is the
+    reason id and its text, logged; a success is logged and leaves the ledger row."""
+    try:
+        if args.ask_command == "default":
+            ask, row = asks.take_default(run.root, run.profile, args.ask_id, by=_by(run))
+            reason, text = "ask-default-taken", f"ask {ask.id} default taken: {ask.default}"
+        else:
+            ask, row = asks.answer(run.root, run.profile, args.ask_id, args.quote)
+            reason, text = "ask-answered", f"ask {ask.id} answered"
+    except asks.AskError as exc:
+        _ask_log(run, exc.reason, args.ask_id, "refuse")
+        return _fail(f"{exc.reason}: {exc.message}")
+    except OSError as exc:
+        return _fail(f"the ask was not changed ({exc.__class__.__name__}); nothing is half done but check `mkway asks`")
+    _ask_log(run, reason, ask.id, "log")
+    print(f"{text}; ledger {row['id']} added")
+    if args.ask_command == "default":
+        run.done(asks.DEFAULT_RECORD, ask.id)  # a session's record comes through the post group; the owner's is here
+    return 0
+
+
+def _by(run: Run, requested=None) -> str:
+    """The `by` of a ledger row (MW-015): the owner's terminal writes `owner` (or the `--by` it typed); a session writes
+    `session:<session id>`, the id from the one-use permit of the lock gate, `session:unknown` with none."""
+    if not run.session:
+        return requested or ledger.formats()["owner_who"]
+    session = cardtool.take_by_permit(run.state)  # taken (removed) at every session run, used or not
+    return requested or f"session:{session or 'unknown'}"
+
+
+def _ledger(run: Run, args) -> int:
+    """`ledger add` (MW-008): a session's command and the owner's alike; it never refuses for what a row says, except
+    that a session never writes `by` as the owner (`ledger-by-owner`, MW-015)."""
+    if run.session and args.by and args.by.strip().lower() == ledger.formats()["owner_who"].lower():
+        run.refusal("ledger-by-owner")
+        return _fail("ledger-by-owner: only the owner's terminal writes by=owner")
+    try:
+        row = ledger.add(run.root, run.profile, card=args.card, topic=args.topic, quote=args.quote,
+                         source=args.source, status=args.status, by=_by(run, args.by))
+    except OSError as exc:
+        return _fail(f"the ledger row was not written ({exc.__class__.__name__})")
+    print(f"ledger {row['id']} added to {ledger.path(run.root, run.profile).relative_to(run.root).as_posix()}")
+    return 0
+
+
+def _card(run: Run, args) -> int:
+    root, profile = run.root, run.profile
+    if args.card_command == "new":
+        folder = cardtool.new_card(root, profile, " ".join(args.title))
+        print(folder.relative_to(root).as_posix())
+        run.done("new", folder.name.split("-", 2)[0] + "-" + folder.name.split("-", 2)[1])
+        return 0
+    if args.card_command in ("take", "release", "open", "close", "set"):
+        return _move(run, args)
+    if args.card_command == "resync":
+        diff = register.reseal(root, profile, add_orderer=args.add_ordered_by)
+        print("\n".join(diff) if diff else "register: no difference against register.last")
+        print("register: seal rewritten")
+        return 0
+    for row in cardtool.list_cards(root, profile):
+        print("  ".join(row[:3]))
+    return 0
+
+
+def _give(run: Run, args) -> int:
+    """The owner's `give` (card MW-011, rule 2): who ordered a card. The owner's own record is `give <card> <value>`."""
+    card_id, value = cardtool.give(run.root, run.profile, run.state, args.card_id, args.who)
+    print(f"{card_id} ordered by {value}")
+    run.done("give", f"{card_id} {value}")
+    return 0
+
+
+def _sessions(run: Run) -> int:
+    """The owner's view (card MW-011, rule 3), read-only: every session id seen in the state records, its last-seen
+    time, the card it holds and the cards it ordered. The engine knows ids, never chat names."""
+    seen, missing = cardtool.seen_sessions(run.state)
+    rows = register.read(run.root, run.profile)
+    closed = register.closed_ids(run.root, run.profile)
+    for sid in sorted(seen, key=lambda s: (seen[s], s), reverse=True):
+        held = records.session_card(run.state, sid, closed) or "none"
+        ordered = ", ".join(r["id"] for r in rows if r.get(register.ORDERED) == sid) or "none"
+        print(f"{sid}  last seen {seen[sid] or cardtool.NE}  holds {held}  ordered {ordered}")
+    if not seen:
+        print("no session id seen in the state records")
+    if missing:
+        print(f"{cardtool.NE}: {missing} row{'s' if missing != 1 else ''} without a session id")
+    return 0
+
+
+def _gate(run: Run, args) -> int:
+    """The owner's switch (deliverable 9): `gates.<name>.on` in the tracked profile; the hook entries change at the
+    next `mkway install`."""
+    import json
+    known = {e.get("gate") for e in dispatch.load_manifest(dispatch.ENGINE_DIR) if e.get("function")}
+    if args.name not in known:
+        return _fail(f"unknown gate {args.name!r}; gates with code: {', '.join(sorted(known))}")
+    if args.gate_command == "watch":  # MW-012: a marker only; the profile is not changed
+        if gatemode.gate_class(dispatch.load_manifest(dispatch.ENGINE_DIR), args.name) != gatemode.FORM:
+            run.refusal("gate-watch-integrity", args.name)
+            return _fail(f"gate-watch-integrity: integrity gates never watch; {args.name} is an integrity gate and "
+                         f"always blocks")
+        gatemode.write_marker(run.state, args.name, "owner")
+        logs.write_refusal(run.state, gatemode.transition_row(args.name, "gate-watch", cause="owner"))
+        print(f"gate {args.name} watch: it still runs, a refusal is logged as would-refuse and the call goes ahead; "
+              f"`mkway gate on {args.name}` returns it to blocking")
+        return 0
+    profile = dict(run.profile)
+    gates = dict(profile.get("gates") or {})
+    entry = dict(gates.get(args.name) or {})
+    entry["on"] = args.gate_command == "on"
+    gates[args.name] = entry
+    profile["gates"] = gates
+    errors = profiles.validate(profile)
+    if errors:  # C53 (R64): an engine writer never writes a profile the schema refuses
+        return _fail("the profile was not changed: the result would be invalid: " + "; ".join(errors[:5]) + ". The "
+                     "owner fixes the profile in their own editor first; `mkway check` prints the same error")
+    target = Path(run.profile_file)
+    tmp = target.with_name(target.name + ".tmp")
+    try:  # a temp file, then replace: never a half-written tracked profile (close check L5)
+        with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(json.dumps(profile, indent=2) + "\n")
+        os.replace(tmp, target)
+    except OSError as exc:
+        return _fail(f"the profile was not changed ({exc.__class__.__name__}); {tmp.name} may be left beside it")
+    if args.gate_command == "on":  # MW-012: the only way back from watch, and it is the owner's
+        had = gatemode.remove_marker(run.state, args.name)
+        logs.write_refusal(run.state, gatemode.transition_row(args.name, gatemode.ON_ROW, cause="owner",
+                                                              was_watch=had))
+    print(f"gate {args.name} {args.gate_command} in {run.profile_file.name}; run `mkway install` to change the hook "
+          f"entries")
+    return 0
+
+
+def _move(run: Run, args) -> int:
+    """take, release, open, close, set (deliverable 4). Who may run which is the lock gate's (owner-only commands);
+    the chain and the close rule are checked here, for the owner's terminal too."""
+    root, profile, card_id, sub = run.root, run.profile, args.card_id, args.card_command
+    if sub == "take":
+        if register.find(register.read(root, profile), card_id) is None:
+            raise cardtool.CardError(f"{card_id} is not in the register", reason="card-unknown")
+        if not run.session:
+            return _fail("`card take` is a session's command: the owner's terminal holds no card")
+        if card_id in records.holders(run.state, register.closed_ids(root, profile)):
+            raise cardtool.CardError(f"{card_id} is held by a session; the owner frees it with `card release "
+                                     f"{card_id} --force` in their own terminal", reason="card-not-yours")
+        run.done("take", card_id)
+        return 0
+    if sub == "release":
+        if card_id not in records.holders(run.state, register.closed_ids(root, profile)):
+            print(f"no one holds {card_id}; nothing changed")
+            return 0
+        if not run.session and not args.force:
+            raise cardtool.CardError(f"{card_id} is held by a session; the owner frees it with `card release "
+                                     f"{card_id} --force`", reason="card-not-yours")
+        run.done("release", card_id)
+        return 0
+    if sub == "set":
+        target = args.status
+        record = False  # H1: `card set` never re-records Paths; only the first open from `proposed` does
+    else:
+        target = "open" if sub == "open" else "closed"
+        record = sub == "open"
+    if sub == "close" and run.session and cardtool.approver(profile) == "orderer":
+        # MW-011: only the lock gate (the hook) knows the session id; it leaves a one-use permit that names it
+        closer = cardtool.take_close_permit(run.state, card_id)
+        if closer is None:
+            raise cardtool.CardError(f"{card_id}: no hook check of this close was found (none, used, or older than "
+                                     f"{cardtool.PERMIT_SECONDS} s): run `mkway card close {card_id}` alone, in its "
+                                     f"plain form, in a session with the engine hooks; or {cardtool.OWNER_TERMINAL}",
+                                     reason="close-not-orderer")
+        written = cardtool.move(root, profile, card_id, "closed", session=True, record_paths=False, closer=closer,
+                                state=run.state)
+        print(f"{card_id} {written}")
+        run.done(sub, card_id)
+        return 0
+    light = not cardtool.owner_moves(profile)  # light mode: a session may make the owner's moves (close check L2)
+    written = cardtool.move(root, profile, card_id, target, session=run.session, record_paths=record, light=light)
+    print(f"{card_id} {written}")
+    run.done(sub, card_id if sub != "set" else f"{card_id} {written}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

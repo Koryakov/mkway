@@ -1,0 +1,459 @@
+{
+  "$comment": "Branch-profile schema (a JSON Schema subset, checked by engine/schema_check.py with the standard library). In schema now: the keys slice 1 reads, plus the per-machine slot. Later groups are declared optional and must stay empty until a branch needs them; see engine/KEYS.md. MW-002 adds vcs (required), ids.card_prefix and gates.<name>.budget_seconds. MW-003 adds cards, register, locks.targets, paths, test_roots, test_env, knowledge.files, questions.files; items leaves the schema (D-8). MW-004 adds agents.cap_minutes. MW-006 adds the commit group (junk, data_patterns, max_file_kb).",
+  "type": "object",
+  "required": [
+    "vcs",
+    "bundle",
+    "gates",
+    "python",
+    "state"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "vcs": {
+      "type": "string",
+      "enum": [
+        "git",
+        "none"
+      ],
+      "description": "git is optional: with none every git step is off (R8); no default"
+    },
+    "bundle": {
+      "type": "object",
+      "required": [
+        "root"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "root": {
+          "type": "string",
+          "format": "relative-path",
+          "description": "bundle folder, relative to the repository top, at any depth"
+        }
+      }
+    },
+    "items": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false,
+      "description": "later (D-8): the card layout is fixed in the engine (<bundle.root>/cards/<ID>-<slug>/CARD.md and REGISTER.md beside it) until a second layout exists"
+    },
+    "ledger": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false,
+      "description": "later: file, parts folder, columns"
+    },
+    "locks": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "lock targets beside the built-in ones; later: names, open files, record, marker",
+      "properties": {
+        "targets": {
+          "type": "array",
+          "description": "a name and repo paths or globs; closed unless the owner's `mkway lock open <name>` opened it",
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "paths"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9_-]*$"
+              },
+              "paths": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "open_by_default": {
+                "type": "boolean",
+                "description": "open until the owner's `mkway lock close <name>` writes a marker; profile targets only, never a built-in name (MW-010)"
+              }
+            }
+          }
+        }
+      }
+    },
+    "gates": {
+      "type": "object",
+      "description": "gate name (engine/manifest.json gate) -> switch; a mode is a nested object with its own switch",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "on": {
+            "type": "boolean"
+          },
+          "budget_seconds": {
+            "type": "number",
+            "description": "seconds a gate may take; the dispatcher passes it in ctx and logs over-budget"
+          },
+          "min_calls": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "description": "read under gates.trip only (MW-012): the calls in 24 hours a form gate needs before it can trip; default 20"
+          },
+          "share": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "read under gates.trip only (MW-012): the refusal share above which a form gate trips into watch; default 0.34"
+          }
+        },
+        "additionalProperties": {
+          "type": "object",
+          "required": [
+            "on"
+          ],
+          "properties": {
+            "on": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        },
+        "description": "a gate switch: on, an optional budget, and nested modes"
+      }
+    },
+    "product_checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "event",
+          "matcher",
+          "command"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "event": {
+            "type": "string",
+            "minLength": 1
+          },
+          "matcher": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "command": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "handback": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false,
+      "description": "later: checkers[]"
+    },
+    "ids": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "decision_row": {
+          "type": "string",
+          "format": "regex"
+        },
+        "rule_card": {
+          "type": "string",
+          "format": "regex"
+        },
+        "work_item": {
+          "type": "string",
+          "format": "regex"
+        },
+        "evidence": {
+          "type": "string",
+          "format": "regex"
+        },
+        "card_prefix": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9]*$",
+          "description": "the card id prefix of `mkway card new`; no default; mkway install writes CARD into the starter profile"
+        }
+      }
+    },
+    "state": {
+      "type": "object",
+      "required": [
+        "dir"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "dir": {
+          "type": "string",
+          "format": "relative-path"
+        }
+      }
+    },
+    "outbox": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false,
+      "description": "later: folder, id patterns file, checkers"
+    },
+    "python": {
+      "type": "object",
+      "required": [
+        "command"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "user": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "per-machine slot (optional; a missing value is reported, never required)",
+      "properties": {
+        "protected_hooks": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "agents": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cap_minutes": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "minutes a helper agent may run; the start block lists each agent of the session over it or with no end row; default 30 (MW-004)"
+        }
+      }
+    },
+    "cards": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "owner_moves": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "proposed",
+              "open",
+              "waiting",
+              "waiting-owner",
+              "closed"
+            ]
+          },
+          "description": "statuses only the owner may set; default [\"open\",\"closed\"]; [] is the light mode"
+        },
+        "approver": {
+          "type": "string",
+          "enum": [
+            "owner-only",
+            "orderer"
+          ],
+          "description": "who closes a card for a session: owner-only (default), or orderer (MW-011: the session that ordered the card, when it is not the holder and the card's tests pass); MW-008 adds other-session"
+        }
+      }
+    },
+    "register": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "columns": {
+          "type": "array",
+          "minItems": 5,
+          "maxItems": 6,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "the register's column names for id, title, status, paths, folder, and optionally a sixth for who ordered the card (MW-011); default Id, Title, Status, Paths, Folder, Ordered by"
+        }
+      }
+    },
+    "paths": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "docs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "a commit holding only these paths runs no tests; default <bundle.root>/cards/**, <bundle.root>/ledger/**, *.md"
+        },
+        "exempt": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "paths the subtask gate always allows; default none"
+        }
+      }
+    },
+    "test_roots": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "format": "relative-path"
+      },
+      "description": "the test folders run at commit; default [\"tests\"]"
+    },
+    "test_env": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+      },
+      "description": "environment variable names passed to the commit's test run, beside ENGINE_TERMS_FILE"
+    },
+    "knowledge": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "relative-path"
+          }
+        }
+      }
+    },
+    "questions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "question files: a write to one needs a search record, like AskUserQuestion"
+        }
+      }
+    },
+    "notify": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "the owner's notification of a new ask (MW-014); the engine ships no channel",
+      "properties": {
+        "command": {
+          "type": "string",
+          "minLength": 1,
+          "description": "a command line the engine runs after an ask file is written, with {file} (the ask file) and {line} (the question, the default, the deadline) filled in; no shell reads it; 10 seconds at most; default none: nothing runs"
+        }
+      }
+    },
+    "owner_ask": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "the questions-to-the-owner gate (MW-007); every key has a default, so the object may be absent or empty",
+      "properties": {
+        "dir": {
+          "type": "string",
+          "format": "relative-path",
+          "description": "the folder of the ask files (<name>_ask.md), relative to the repository top; default <bundle.root>/asks"
+        },
+        "markers": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "a final reply with a line that starts with one of these strings is an ask; default [\"Request:\"]"
+        },
+        "sources": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "pattern": "^[^\\s:]+$"
+          },
+          "description": "the source names of the quote lines (> <source>: <verbatim>) and of the count lines (<source>: N contradictions); default [\"review\"]"
+        },
+        "max_open": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "how many asks with status open one session may have at a time (MW-014); default 1"
+        },
+        "tool_allowed": {
+          "type": "boolean",
+          "description": "true lets a session use the pop-up question tool (AskUserQuestion); default false: it is refused and the file route is named (MW-014)"
+        }
+      }
+    },
+    "commit": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "the commit gate (MW-006); every key has a default, so the object may be absent or empty",
+      "properties": {
+        "junk": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "patterns of files a commit never holds (a name or glob at any depth; a trailing / is a folder); default __pycache__/, *.pyc, .pytest_cache/, .pytest_tmp/, *.log, *.tmp, *.orig, *.rej, .DS_Store, Thumbs.db"
+        },
+        "data_patterns": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "patterns of data files a commit never holds, by extension; default *.csv, *.tsv, *.xlsx, *.xls, *.parquet, *.db, *.sqlite, *.sqlite3, *.bak, *.dump"
+        },
+        "max_file_kb": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "the largest file, in KB, a commit may hold; default 1024"
+        }
+      }
+    },
+    "tests": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "the commit gate's test run (MW-005); every key has a default, so the object may be absent or empty",
+      "properties": {
+        "command": {
+          "type": "string",
+          "minLength": 1,
+          "description": "the whole command line of the run, roots included, started in the exported staged tree; its first word is the profile's Python; default python -m pytest -q followed by the test_roots"
+        }
+      }
+    },
+    "delete": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "the delete gate (MW-009); every key has a default, so the object may be absent or empty",
+      "properties": {
+        "max_backup_mb": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "the largest backup, in MB, a delete may make before the tool runs; default 5120"
+        },
+        "sql_allowed": {
+          "type": "boolean",
+          "description": "true turns the refusal of destructive SQL off (a task with a scratch database); default false"
+        }
+      }
+    }
+  }
+}

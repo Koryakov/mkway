@@ -1,0 +1,75 @@
+{
+  "_about": "Engine-default values, grouped by the hook config they come from, read at the pin on 2026-11-09; a branch profile may override them. Each key is listed in engine/KEYS.md; a key not present here is marked there as later, with the reason. Times are in seconds.",
+  "bash_speed_guard": {
+    "sleep_limit_seconds": 20
+  },
+  "quality_gate": {
+    "operators": ["compare", "boolop", "not", "number", "boolconst", "cond_true", "cond_false", "return_none", "stmt_remove"],
+    "compare": {"<": "<=", "<=": "<", ">": ">=", ">=": ">", "==": "!=", "!=": "=="},
+    "max_mutants": 40,
+    "budget_seconds": 300,
+    "workers": 4,
+    "cpu_reserve": 1,
+    "temp_dir": null,
+    "max_equivalent": 3,
+    "mutant_timeout_min": 120,
+    "mutant_timeout_factor": 6,
+    "listed_max": 20,
+    "equivalent_prefix": "equivalent:",
+    "acceptance_heading": "## Acceptance examples"
+  },
+  "st_tests": {
+    "budget_seconds": 780,
+    "startup_margin_seconds": 60,
+    "shared_run_max_cmdline": 20000
+  },
+  "outbox_check": {
+    "check_suffix": ".check.md",
+    "write_tools": ["Write", "Edit", "MultiEdit"],
+    "shell_tools": ["Bash", "PowerShell"],
+    "lines": [
+      {"name": "sha256", "regex": "sha256: ([0-9a-fA-F]{64})", "equals": "document_sha256", "example": "`sha256: <the document's sha256>`"},
+      {"name": "numbers", "regex": "numbers: \\d+ checked, 0 contradictions", "example": "`numbers: N checked, 0 contradictions`"},
+      {"name": "claims", "regex": "claims: \\d+ checked, 0 overstated, 0 without basis", "example": "`claims: N checked, 0 overstated, 0 without basis`"},
+      {"name": "patterns", "regex": "patterns: clean", "example": "`patterns: clean`"},
+      {"name": "links", "regex": "links: clean", "example": "`links: clean`"},
+      {"name": "checker", "regex": "checker: (\\S+)", "one_of": "checkers", "example": "`checker: <agent type>`"}
+    ]
+  },
+  "decision_search": {
+    "log_env": "FIND_DECISIONS_LOG",
+    "cache_env": "FIND_DECISIONS_CACHE",
+    "formats": {
+      "ledger_heading": "## Ledger",
+      "ledger_columns": ["id", "date", "card", "topic", "quote", "by", "source", "asked", "replaces", "status", "note"],
+      "closed_statuses": ["superseded", "withdrawn"],
+      "date_keys": ["at", "date", "time", "ts", "created", "created_at", "updated_at", "asked_at", "answered_at"],
+      "word_keys": ["owner_text", "text", "head", "quote", "question", "answer", "name", "meaning"],
+      "id_keys": ["id", "doc_id", "Id"],
+      "owner_who": "owner",
+      "owner_keys": ["owner_text"],
+      "chat_keys": ["head", "session"]
+    }
+  },
+  "lock_gate": {
+    "git_builtins": ["add", "am", "annotate", "apply", "archive", "bisect", "blame", "branch", "bugreport", "bundle",
+      "cat-file", "check-attr", "check-ignore", "check-mailmap", "check-ref-format", "checkout", "checkout--worker",
+      "checkout-index", "cherry", "cherry-pick", "clean", "clone", "column", "commit", "commit-graph", "commit-tree",
+      "config", "count-objects", "credential", "credential-cache", "credential-cache--daemon", "credential-store",
+      "describe", "diagnose", "diff", "diff-files", "diff-index", "diff-tree", "difftool", "env--helper",
+      "fast-export", "fast-import", "fetch", "fetch-pack", "fmt-merge-msg", "for-each-ref", "for-each-repo",
+      "format-patch", "fsck", "fsck-objects", "fsmonitor--daemon", "gc", "get-tar-commit-id", "grep", "hash-object",
+      "help", "hook", "index-pack", "init", "init-db", "interpret-trailers", "log", "ls-files", "ls-remote",
+      "ls-tree", "mailinfo", "mailsplit", "maintenance", "merge", "merge-base", "merge-file", "merge-index",
+      "merge-ours", "merge-recursive", "merge-recursive-ours", "merge-recursive-theirs", "merge-subtree",
+      "merge-tree", "mktag", "mktree", "multi-pack-index", "mv", "name-rev", "notes", "pack-objects",
+      "pack-redundant", "pack-refs", "patch-id", "pickaxe", "prune", "prune-packed", "pull", "push", "range-diff",
+      "read-tree", "rebase", "receive-pack", "reflog", "refs", "remote", "remote-ext", "remote-fd", "repack",
+      "replace", "replay", "rerere", "reset", "restore", "rev-list", "rev-parse", "revert", "rm", "send-pack",
+      "shortlog", "show", "show-branch", "show-index", "show-ref", "sparse-checkout", "stage", "stash", "status",
+      "stripspace", "submodule--helper", "switch", "symbolic-ref", "tag", "unpack-file", "unpack-objects",
+      "update-index", "update-ref", "update-server-info", "upload-archive", "upload-archive--writer",
+      "upload-pack", "var", "verify-commit", "verify-pack", "verify-tag", "version", "whatchanged", "worktree",
+      "write-tree"]
+  }
+}
