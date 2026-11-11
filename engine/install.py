@@ -37,7 +37,8 @@ import logs
 import paths
 import profiles
 
-SET_FILES = ("mkway.py", "VERSION", "cards/_TEMPLATE/CARD.md")  # MW-016: the version travels with the copy
+SET_FILES = ("mkway.py", "VERSION", "cards/_TEMPLATE/CARD.md",  # MW-016: the version travels with the copy
+             "cards/_TEMPLATE/ORDER.md")  # MW-017: the order file of a lead's card
 SET_DIRS = ("engine/", "tools/", "tests/", "fixtures/synthetic/")
 SKIP_PARTS = {".git", "__pycache__", ".pytest_tmp", ".pytest_cache"}
 BUNDLE_FOLDERS = ("cards", "ledger", "locks", "state")  # created by install
@@ -632,6 +633,31 @@ def version_tag_line(root: Path, env=None):
     return f"version tag: warning: the tag {want} is missing at HEAD; the owner tags the release (check never writes one)"
 
 
+def _copy_manifest(copy: Path):
+    """The manifest of the installed copy (the one the hook entries were generated from); None when unreadable."""
+    try:
+        return json.loads((Path(copy) / "engine" / "manifest.json").read_text(encoding="utf-8"))["entries"]
+    except (OSError, ValueError, KeyError):
+        return None
+
+
+def message_gate_line(root: Path, profile, manifest=None):
+    """MW-018: the `mkway check` line on the SendMessage hook entry. A warning, never a failure, when the owned hook
+    entries of the settings file lack it while the gate `message` is on; None when the gate is off or the manifest has
+    no entry for it."""
+    manifest = manifest if manifest is not None else _copy_manifest(ENGINE_DIR.parent) or []
+    entries = [e for e in manifest if e.get("gate") == "message" and _loadable_on(profile, e)
+               and e.get("matcher") == "SendMessage"]
+    if not entries:
+        return None
+    live = live_entries(Path(root) / ".claude" / "settings.local.json", profiles.bundle_root(profile))
+    if any(e.get("event") == "PreToolUse" and "SendMessage" in (e.get("matcher") or "").split("|")
+           and "--group message" in (e.get("command") or "") for e in live):
+        return "message gate: the SendMessage hook entry is present"
+    return ("message gate: warning: .claude/settings.local.json has no SendMessage hook entry, so messages are not "
+            "checked against the inbox (fix: the owner runs `mkway install`)")
+
+
 def check(root: Path, *, profile_arg=None, env=None) -> tuple:
     """(exit code, lines)."""
     env = dict(os.environ if env is None else env)
@@ -665,6 +691,14 @@ def check(root: Path, *, profile_arg=None, env=None) -> tuple:
         tag_line = version_tag_line(root, env)
         if tag_line:
             lines.append(tag_line)
+    gate_line = message_gate_line(root, profile, _copy_manifest(copy))
+    if gate_line:
+        lines.append(gate_line)
+    try:  # MW-022: an older per-work-tree lock marker is still read for one version; a warning, never a failure
+        import locks
+        lines += locks.marker_warnings(root, profile)
+    except (OSError, ValueError, ImportError):
+        pass
     ini =profiles.state_dir(root, profile) / "check" / "pytest.ini"
     ini.parent.mkdir(parents=True, exist_ok=True)
     ini.write_text("[pytest]\nmarkers =\n    engine_repo: needs the engine repository itself\n", encoding="utf-8")

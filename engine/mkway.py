@@ -6,7 +6,16 @@
     mkway.py check [--root <path>] [--profile <path>]
     mkway.py card new <title> | list | resync [--add-ordered-by] | take <id> | release <id> [--force] | open <id>
                   | close <id> | set <id> open|waiting|closed
-    mkway.py give <card> <who>      the owner's: who ordered a card (a session id prefix, or `owner`; card MW-011)
+    mkway.py give <card> <who>      the owner's: who ordered a card (a session id prefix, or `owner`; card MW-011); a
+                                    registered lead's give of a card it ordered is a hand-off (MW-017)
+    mkway.py lead register | accept <card> | add <id-prefix> | remove <id-prefix>   the lead role (MW-017); add and
+                                    remove are the owner's
+    mkway.py ack <id>               a session clears one row of its own inbox (the owner's terminal: any inbox; MW-017, MW-018)
+    mkway.py send --to <id-prefix> --kind <kind> --file <body> [--reply-to <id>]   a message into a session's inbox, in the
+                                    star per card; prints the ping line to send with SendMessage (MW-018)
+    mkway.py inbox <id>             shows one row of the caller's own inbox (the owner's terminal: any row; MW-018)
+    mkway.py board                  inboxes, cards and asks in one view (MW-018)
+    mkway.py leads                  every lead: cards ordered, overdue, last activity, unacked notices (MW-017)
     mkway.py sessions               the owner's view: every session id seen, its card, the cards it ordered
     mkway.py lock open <name> [--minutes N] | close <name> [--minutes N, ignored] | list
     mkway.py gate off <name> | on <name> | watch <name>   (watch: a form gate only; `on` ends it; card MW-012)
@@ -16,6 +25,10 @@
                         [--status <text>] [--by <text>]     (topic: plain words, letters, digits, spaces, dashes)
     mkway.py search <words>...
     mkway.py asks                   the board of the ask files (MW-014)
+    mkway.py outbox                 the files made for someone outside the session, the state of each check (MW-019)
+    mkway.py built <path>           a result file built on a clean, tested HEAD: the provenance row (MW-020)
+    mkway.py delivered <path>       the owner's: a result file went out; a copy is kept as the base (MW-020)
+    mkway.py deliverables           the result files: sha prefix, built state, delivered base (MW-020)
 
 Run it through the root launcher `mkway.py`: in the engine repository and in a task's copy alike the path is
 `mkway/engine/mkway.py` under the task root (decision C12). The root is `--root`, else `$CLAUDE_PROJECT_DIR`,
@@ -47,14 +60,20 @@ import cardtool  # noqa: E402
 import dispatch  # noqa: E402
 import gatemode  # noqa: E402
 import install  # noqa: E402
+import leads  # noqa: E402
 import ledger  # noqa: E402
 import locks  # noqa: E402
 import logs  # noqa: E402
+import deliverables  # noqa: E402
+import messages  # noqa: E402
+import outbox  # noqa: E402
 import paths  # noqa: E402
 import profiles  # noqa: E402
 import records  # noqa: E402
 import register  # noqa: E402
+import rules  # noqa: E402
 import search  # noqa: E402
+import sessions  # noqa: E402
 import trash  # noqa: E402
 
 
@@ -116,6 +135,31 @@ def _parser() -> argparse.ArgumentParser:
     _place(give)
     sess = sub.add_parser("sessions", help="the owner's view: every session id seen, with its card and its orders")
     _place(sess)
+    lead_p = sub.add_parser("lead", help="the lead role: register, accept a hand-off; the owner adds and removes")
+    lead_sub = lead_p.add_subparsers(dest="lead_command", required=True)
+    _place(lead_sub.add_parser("register", help="a session declares itself a lead"))
+    lacc = lead_sub.add_parser("accept", help="the new lead takes over a card another lead gave it")
+    lacc.add_argument("card_id", help="a card id, or a bare number that takes the profile's card prefix")
+    _place(lacc)
+    for word, text in (("add", "the owner's: make a session seen in the state records a lead"),
+                       ("remove", "the owner's: end a registered lead's role")):
+        lone = lead_sub.add_parser(word, help=text)
+        lone.add_argument("who", help="a prefix of one session id")
+        _place(lone)
+    ack_p = sub.add_parser("ack", help="a session clears one row of its own inbox")
+    ack_p.add_argument("notice_id")
+    _place(ack_p)
+    send_p = sub.add_parser("send", help="put a message into a session's inbox; prints the ping line to send")
+    send_p.add_argument("--to", required=True, help="a session id, or a prefix that starts exactly one")
+    send_p.add_argument("--kind", required=True, choices=messages.KINDS)
+    send_p.add_argument("--file", required=True, help="the file that holds the body")
+    send_p.add_argument("--reply-to", dest="reply_to", help="the id of a row of your own inbox this answers")
+    _place(send_p)
+    inbox_p = sub.add_parser("inbox", help="show one row of your own inbox")
+    inbox_p.add_argument("row_id")
+    _place(inbox_p)
+    _place(sub.add_parser("board", help="inboxes, cards and asks in one view"))
+    _place(sub.add_parser("leads", help="every lead: cards ordered, overdue, last activity, unacked notices"))
     gate_p = sub.add_parser("gate", help="the owner's switch of one gate in the profile")
     gate_sub = gate_p.add_subparsers(dest="gate_command", required=True)
     for name in ("off", "on", "watch"):  # `watch` (MW-012): a form gate still runs but never blocks; `on` ends it
@@ -152,8 +196,18 @@ def _parser() -> argparse.ArgumentParser:
     ladd.add_argument("--by", type=_status, help="who wrote the row; default `session:<session id>`; `owner` only "
                                                  "from the owner's terminal")
     _place(ladd)
+    _place(sub.add_parser("rules", help="the rule cards: id, card, test, exists or missing, last green tree (MW-021)"))
     board = sub.add_parser("asks", help="the board of the ask files: id, card, age, deadline, default, status, blocked")
     _place(board)
+    box = sub.add_parser("outbox", help="the files under outbox.dir: file, sha prefix, check state, checker, time")
+    _place(box)
+    bld = sub.add_parser("built", help="record that a result file was built on a clean, tested HEAD (MW-020)")
+    bld.add_argument("path")
+    _place(bld)
+    dlv = sub.add_parser("delivered", help="the owner's: record that a result file went out, and keep a copy (MW-020)")
+    dlv.add_argument("path")
+    _place(dlv)
+    _place(sub.add_parser("deliverables", help="the result files: sha prefix, built state, delivered base (MW-020)"))
     ask_p = sub.add_parser("ask", help="a session's commands on its ask: take the default, or record the answer")
     ask_sub = ask_p.add_subparsers(dest="ask_command", required=True)
     adef = ask_sub.add_parser("default", help="reversible ask past its deadline: take the default, ledger row")
@@ -224,6 +278,7 @@ class Run:
         self.profile = profile
         self.session = records.SESSION_ENV in env
         self.state = profiles.state_dir(root, profile)
+        self.shared = profiles.shared_state_dir(root, profile)  # MW-017: leads, inboxes and sessions cross work trees
 
     def done(self, kind: str, value: str) -> None:
         """Record a successful command: a session's through the `post` group, the owner's here (deliverable 2)."""
@@ -260,10 +315,13 @@ def _owner_only(args, profile=None, root=None):
         return command
     if command == "gate":
         return f"gate {args.gate_command}"
-    if command == "give":
-        return "give"
+    if command == "lead" and args.lead_command in ("add", "remove"):  # MW-017: only the owner makes or ends a lead
+        return f"lead {args.lead_command}"
+    # `give` is judged in `_give`: a registered lead's give is a hand-off, any other session's is refused there (MW-017)
     if command == "trash":  # MW-009: a session never reads or empties the backups of its own deletes
         return f"trash {args.trash_command}"
+    if command == "delivered":  # MW-020: only the owner says what went out, so no session picks its own base
+        return "delivered"
     if command != "card":
         return None
     sub = args.card_command
@@ -353,13 +411,38 @@ def main(argv=None, env=None) -> int:
             return _ledger(run, args)
         if args.command == "give":
             return _give(run, args)
+        if args.command == "lead":
+            return _lead(run, args)
+        if args.command == "ack":
+            return _ack(run, args)
+        if args.command == "send":
+            return _send(run, args)
+        if args.command == "inbox":
+            return _inbox(run, args)
+        if args.command == "board":
+            print(chr(10).join(messages.board_lines(run.root, run.profile)))
+            return 0
+        if args.command == "leads":
+            print("\n".join(leads.view_lines(run.root, run.profile)))
+            return 0
         if args.command == "sessions":
             return _sessions(run)
         if args.command == "ask":
             return _ask(run, args)
+        if args.command == "rules":  # MW-021: read-only, a session's command too
+            print(chr(10).join(rules.lines(run.root, run.profile)))
+            return 0
         if args.command == "asks":
             print(chr(10).join(asks.board_lines(run.root, run.profile)))
             return 0
+        if args.command == "outbox":  # MW-019: read only, any terminal
+            print(chr(10).join(outbox.board_lines(run.root, run.profile)))
+            return 0
+        if args.command == "deliverables":  # MW-020: read only, any terminal
+            print(chr(10).join(deliverables.lines(run.root, run.profile)))
+            return 0
+        if args.command in ("built", "delivered"):  # MW-020
+            return _deliverable(run, args)
         return _card(run, args)
     except register.RegisterError as exc:
         run.refusal(exc.reason)
@@ -371,6 +454,9 @@ def main(argv=None, env=None) -> int:
         return _fail(str(exc))
     except locks.LockError as exc:
         return _fail(str(exc))
+    except (leads.LeadError, messages.MessageError) as exc:
+        run.refusal(exc.reason)
+        return _fail(f"{exc.reason}: {exc.message}")
 
 
 def _delete(run: Run, args) -> int:
@@ -408,6 +494,10 @@ def _trash(run: Run, args) -> int:
 
 def _lock(run: Run, args) -> int:
     if args.lock_command == "list":
+        print(f"lock markers read from: {locks.lock_folder(run.root, run.profile)} (shared by every work tree of the "
+              f"repository)")
+        for line in locks.marker_warnings(run.root, run.profile):
+            print(line)
         for name, until in locks.open_locks(run.root, run.profile):
             print(f"{name} open until {until}")
         for line in locks.hold_lines(run.root, run.profile):
@@ -460,8 +550,24 @@ def _ask(run: Run, args) -> int:
     _ask_log(run, reason, ask.id, "log")
     print(f"{text}; ledger {row['id']} added")
     if args.ask_command == "default":
+        _notify_default(run, ask)
         run.done(asks.DEFAULT_RECORD, ask.id)  # a session's record comes through the post group; the owner's is here
     return 0
+
+
+def _notify_default(run: Run, ask) -> None:
+    """MW-017: a default taken is a notice to the lead that ordered the card of the asking session; with that card not
+    established, to every lead; a card the owner (or a session that is no lead) ordered tells no lead. Never fails."""
+    try:
+        body = (f"ask {ask.id} default taken: {ask.default}; the owner had not answered by the deadline, so the work "
+                f"went on with the default (see the ledger row of ask {ask.id})")
+        card = asks.card_of(run.root, run.profile, ask.id)
+        if card == asks.UNKNOWN:
+            leads.notify_all(run.shared, body)
+        else:
+            leads.notify_orderer(run.root, run.profile, card, body)
+    except Exception:
+        pass
 
 
 def _by(run: Run, requested=None) -> str:
@@ -471,6 +577,29 @@ def _by(run: Run, requested=None) -> str:
         return requested or ledger.formats()["owner_who"]
     session = cardtool.take_by_permit(run.state)  # taken (removed) at every session run, used or not
     return requested or f"session:{session or 'unknown'}"
+
+
+def _deliverable(run: Run, args) -> int:
+    """`built` (a session's command and the owner's) and `delivered` (the owner's; a session never gets here, `main`
+    refuses it first), MW-020. A session's id is the lock gate's one-use permit, `owner` is the owner's terminal."""
+    who = (cardtool.take_by_permit(run.state) or cardtool.NE) if run.session else ledger.formats()["owner_who"]
+    try:
+        if args.command == "delivered":
+            row = deliverables.deliver(run.root, run.profile, args.path)
+            print(f"delivered {row['path']} {row['sha256'][:8]}")
+            return 0
+        row = deliverables.build(run.root, run.profile, args.path, who)
+    except deliverables.Refused as exc:
+        run.refusal(exc.reason, args.path)
+        return _fail(f"{exc.reason}: {exc.message}")
+    text = deliverables.built_text(row)
+    try:
+        ledger.add(run.root, run.profile, card="-", topic="built", quote=text, source="mkway built", status="built",
+                   by=f"session:{who}" if run.session else who)
+    except OSError as exc:
+        sys.stderr.write(f"mkway: the ledger row was not written ({exc.__class__.__name__})\n")
+    print(text)
+    return 0
 
 
 def _ledger(run: Run, args) -> int:
@@ -492,8 +621,13 @@ def _card(run: Run, args) -> int:
     root, profile = run.root, run.profile
     if args.card_command == "new":
         folder = cardtool.new_card(root, profile, " ".join(args.title))
+        card_id = folder.name.split("-", 2)[0] + "-" + folder.name.split("-", 2)[1]
+        if run.session:  # MW-017: a lead's new card gets its order file; the lock gate's permit names the session
+            maker = cardtool.take_by_permit(run.state)
+            if maker and leads.is_lead(run.shared, maker):
+                leads.write_order(folder, card_id)
         print(folder.relative_to(root).as_posix())
-        run.done("new", folder.name.split("-", 2)[0] + "-" + folder.name.split("-", 2)[1])
+        run.done("new", card_id)
         return 0
     if args.card_command in ("take", "release", "open", "close", "set"):
         return _move(run, args)
@@ -508,23 +642,133 @@ def _card(run: Run, args) -> int:
 
 
 def _give(run: Run, args) -> int:
-    """The owner's `give` (card MW-011, rule 2): who ordered a card. The owner's own record is `give <card> <value>`."""
+    """The owner's `give` (card MW-011, rule 2): who ordered a card. The owner's own record is `give <card> <value>`.
+    A session's give (MW-017) is a registered lead's hand-off: the session id is the lock gate's one-use permit, never
+    a word of the command; any other session is refused as before."""
+    if run.session:
+        lead = cardtool.take_by_permit(run.state)
+        if not lead or not leads.is_lead(run.shared, lead):
+            return _refuse_in_session("give")
+        card_id, target = leads.give(run.root, run.profile, run.shared, lead, args.card_id, args.who)
+        print(f"{card_id} offered to {target}; it changes hands when that lead runs `mkway lead accept {card_id}`")
+        return 0
     card_id, value = cardtool.give(run.root, run.profile, run.state, args.card_id, args.who)
     print(f"{card_id} ordered by {value}")
     run.done("give", f"{card_id} {value}")
     return 0
 
 
+def _lead_session(run: Run) -> str:
+    """The session id of a session's lead command: the one-use permit of the lock gate (the hook input is the only
+    source of an id). `lead-no-session` when there is none."""
+    session = cardtool.take_by_permit(run.state)
+    if not session:
+        raise leads.LeadError("lead-no-session", f"no hook check of this call was found (none, used, or older than "
+                                                 f"{cardtool.PERMIT_SECONDS} s), so the session id is not "
+                                                 f"established; run the command alone, in its plain form, in a session "
+                                                 f"with the engine hooks, or the owner runs `mkway lead add "
+                                                 f"<id-prefix>`")
+    return session
+
+
+def _lead(run: Run, args) -> int:
+    """`lead register|accept` (a session's; the id comes from the permit) and `lead add|remove` (the owner's terminal,
+    refused to a session before this; card MW-017)."""
+    sub = args.lead_command
+    if sub in ("add", "remove"):
+        if sub == "add":
+            sid = leads.resolve_seen(run.state, args.who, run.shared)
+            leads.register_lead(run.shared, sid)
+            print(f"{sid} is a lead")
+        else:
+            sid = leads.resolve_lead(run.shared, args.who)
+            leads.remove_lead(run.shared, sid)
+            print(f"{sid} is no longer a lead")
+        run.done("lead", f"{sub} {sid}")
+        return 0
+    if not run.session:
+        raise leads.LeadError("lead-session-only", f"`mkway lead {sub}` is a session's command: the lead runs it in its "
+                                                   f"own Claude session; the owner makes a lead with `mkway lead add "
+                                                   f"<id-prefix>`")
+    session = _lead_session(run)
+    if sub == "register":
+        added = leads.register_lead(run.shared, session)
+        print(f"session {session} is a lead" + ("" if added else " (already registered)"))
+        run.done("lead", "register")
+        return 0
+    card_id, was = leads.accept(run.root, run.profile, run.shared, session, args.card_id)
+    print(f"{card_id} ordered by {session} (was {was})")
+    run.done("lead", f"accept {card_id}")
+    return 0
+
+
+def _message_session(run: Run) -> str:
+    """The session id of a messaging command: the one-use permit of the lock gate (the hook input is the only source of
+    an id). `message-no-session` when there is none."""
+    session = cardtool.take_by_permit(run.state)
+    if not session:
+        raise messages.MessageError("message-no-session", f"no hook check of this call was found (none, used, or older "
+                                                          f"than {cardtool.PERMIT_SECONDS} s), so the session id is not "
+                                                          f"established; run the command alone, in its plain form, in "
+                                                          f"a session with the engine hooks")
+    return session
+
+
+def _ack(run: Run, args) -> int:
+    """`ack <id>` (card MW-017, MW-018): a session clears one row of its own inbox, a builder as well as a lead; a row of
+    another inbox is `ack-not-yours`; the owner's terminal acks any row."""
+    row = leads.ack(run.shared, _message_session(run) if run.session else None, args.notice_id)
+    print(f"{row.get('kind', 'notice')} {row['id']} acked")
+    return 0
+
+
+def _read_body(root: Path, name: str) -> str:
+    for candidate in (Path(name), Path(root) / name):
+        try:
+            return candidate.read_text(encoding="utf-8-sig")
+        except (OSError, UnicodeError):
+            continue
+    raise messages.MessageError("message-no-file", f"the body file {name!r} cannot be read; write the message into a "
+                                                   f"file and name it with `--file <path>`")
+
+
+def _send(run: Run, args) -> int:
+    """`send` (card MW-018): a session's command; the sender is the hook's session id, never a word of the command. The
+    row goes into the recipient's inbox; the ping line is printed for the sender to send with SendMessage."""
+    if not run.session:
+        raise messages.MessageError("send-session-only", "`mkway send` is a session's command: the owner has no inbox "
+                                                         "and reads `mkway board`; the owner tells a lead through a "
+                                                         "session")
+    sender = _message_session(run)
+    sent = messages.send(run.root, run.profile, run.shared, sender, args.to, args.kind,
+                         _read_body(run.root, args.file), args.reply_to)
+    print(f"{args.kind} {sent.row['id']} is in the inbox of {sent.target}")
+    print(messages.ping_line(sent.row["id"]))
+    print(f"root: {sent.root or cardtool.NE}")
+    print("next: in ListAgents find the session that runs in that root folder and send it exactly the ping line above, "
+          "nothing else, with SendMessage (a ref is not a session id; no socket is used)")
+    return 0
+
+
+def _inbox(run: Run, args) -> int:
+    """`inbox <id>` (card MW-018): shows one row to the session it is addressed to; the owner's terminal reads any."""
+    session = _message_session(run) if run.session else None
+    print(chr(10).join(messages.show_lines(messages.show(run.shared, session, args.row_id))))
+    return 0
+
+
 def _sessions(run: Run) -> int:
     """The owner's view (card MW-011, rule 3), read-only: every session id seen in the state records, its last-seen
     time, the card it holds and the cards it ordered. The engine knows ids, never chat names."""
-    seen, missing = cardtool.seen_sessions(run.state)
+    seen, missing = cardtool.seen_sessions(run.state, run.shared)  # MW-017: the shared sessions file counts too
+    roots = {sid: root for sid, (_ts, root) in sessions.latest(run.shared).items()}
     rows = register.read(run.root, run.profile)
     closed = register.closed_ids(run.root, run.profile)
     for sid in sorted(seen, key=lambda s: (seen[s], s), reverse=True):
         held = records.session_card(run.state, sid, closed) or "none"
         ordered = ", ".join(r["id"] for r in rows if r.get(register.ORDERED) == sid) or "none"
-        print(f"{sid}  last seen {seen[sid] or cardtool.NE}  holds {held}  ordered {ordered}")
+        print(f"{sid}  last seen {seen[sid] or cardtool.NE}  holds {held}  ordered {ordered}  "
+              f"root {roots.get(sid) or cardtool.NE}")
     if not seen:
         print("no session id seen in the state records")
     if missing:
@@ -620,6 +864,13 @@ def _move(run: Run, args) -> int:
         return 0
     light = not cardtool.owner_moves(profile)  # light mode: a session may make the owner's moves (close check L2)
     written = cardtool.move(root, profile, card_id, target, session=run.session, record_paths=record, light=light)
+    if run.session and sub == "set" and written == "waiting":  # MW-017: the builder finished; the orderer is told
+        try:
+            leads.notify_orderer(root, profile, card_id, f"builder finished: {card_id} went to waiting; read its Log, "
+                                                         f"then close it with `mkway card close {card_id}` once its "
+                                                         f"tests pass")
+        except Exception:
+            pass
     print(f"{card_id} {written}")
     run.done(sub, card_id if sub != "set" else f"{card_id} {written}")
     return 0

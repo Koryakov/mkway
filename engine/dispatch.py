@@ -195,6 +195,21 @@ def run(event: str, group: str, stdin_text: str, *, env=None, root_arg=None, pro
         return _crash(exc, info)
 
 
+def _note_session(event: str, root, profile, session) -> None:
+    """MW-017 (addition 1): the SessionStart hook appends `{session_id, root, ts}` to the shared `sessions.jsonl`; a prompt
+    refreshes the last-seen row at most once in ten minutes."""
+    import sessions
+    sessions.touch(profiles.shared_state_dir(root, profile), session, root, force=event == "SessionStart")
+
+
+def _notify_trip(state, gate_name: str, counts: dict) -> None:
+    """MW-017: a form gate that tripped into watch is a notice to every registered lead (no lead: nothing is written)."""
+    import leads
+    leads.notify_all(state, f"gate {gate_name} tripped into watch: {counts.get('refused')} of {counts.get('calls')} calls "
+                            f"refused in the last 24 h; it now logs would-refuse and no longer blocks. The owner "
+                            f"returns it to blocking with `mkway gate on {gate_name}`")
+
+
 def _crash(exc: Exception, info: dict) -> Result:
     """The outer error handler. In the groups whose entry carries `onFailure: block` (edit, shell) a failure the
     dispatcher cannot evaluate past exits 2, so the tool call is blocked with the reason. Every failure in the other
@@ -243,6 +258,8 @@ def _run(event, group, stdin_text, env, root_arg, profile_arg, engine_dir, manif
     tool = payload.get("tool_name")
     tool_input = payload.get("tool_input")
     info.update(session=session, tool=tool)
+    if event in ("SessionStart", "UserPromptSubmit"):  # MW-017: the shared sessions file, one row per start and per 10 min
+        _guarded(log_errors, lambda: _note_session(event, root, profile, session))
     target = logs.target_of(tool_input)
     entries = manifest if manifest is not None else load_manifest(engine_dir)
     started = time.perf_counter()
@@ -347,6 +364,8 @@ def _run(event, group, stdin_text, env, root_arg, profile_arg, engine_dir, manif
                 tripped = _guarded(log_errors, lambda: gatemode.trip(state, profile, mode_gate))
                 if tripped:
                     log(base_row(name, "gate-tripped", "log", cause="tripped", **tripped))
+                    _guarded(log_errors, lambda: _notify_trip(profiles.shared_state_dir(root, profile), mode_gate,
+                                                              tripped))  # MW-017: every lead is told
             if budget is not None and elapsed_ms > budget * 1000:
                 log(base_row(name, "over-budget", "log", elapsed_ms=round(elapsed_ms, 3),
                                                    budget_seconds=budget))

@@ -30,9 +30,10 @@ def _first_line(root):
 
 
 def test_the_version_file_is_semver():
-    """E1: `VERSION` at the root holds `0.1.0`, one line."""
+    """E1: `VERSION` at the root holds one semantic version, one line. Changed by MW-017 (E21): the number is `0.2.0`
+    (the lead role adds commands and gates: a minor bump by the README's rule)."""
     text = (REPO / "VERSION").read_text(encoding="utf-8")
-    assert text.strip() == "0.1.0" and SEMVER.fullmatch(text.strip())
+    assert text.strip() == "0.2.0" and SEMVER.fullmatch(text.strip()) and len(text.splitlines()) == 1
 
 
 def test_the_start_block_shows_the_copys_version(tmp_path):
@@ -116,16 +117,20 @@ def _register_rows():
 
 
 def test_the_changelog_covers_the_register():
-    """E5: `## 0.1.0`, and each register card (every status: a register row exists once the card is in the tree) is
-    one line with its id and its register title, so the file cannot drift from the register."""
+    """E5: the top release heading is the `VERSION` text; each register card (every status: a register row exists once
+    the card is in the tree) is one line with its id and its register title in exactly one release section, so the
+    file cannot drift from the register. Changed by MW-017 (E21): releases `## 0.2.0` and `## 0.1.0`; the sections
+    together carry every register row once."""
     text = (REPO / "CHANGELOG.md").read_text(encoding="utf-8")
-    assert text.startswith("# Changelog") and "\n## 0.1.0\n" in text
-    section = text.split("\n## 0.1.0\n", 1)[1].split("\n## ", 1)[0]
-    lines = [x for x in section.splitlines() if x.startswith("- ")]
+    version = (REPO / "VERSION").read_text(encoding="utf-8").strip()
+    top, old = f"\n## {version}\n", "\n## 0.1.0\n"
+    assert text.startswith("# Changelog") and top in text and old in text
+    assert text.index(top) < text.index(old)
+    lines = [x for x in text.splitlines() if x.startswith("- ")]
     rows = _register_rows()
     assert len(rows) >= 16
     for card_id, title, _status in rows:
-        assert any(card_id in x and title in x for x in lines), f"{card_id} {title!r} is not in the changelog"
+        assert sum(1 for x in lines if card_id in x and title in x) == 1, f"{card_id} {title!r} is not in the changelog"
     assert len(lines) == len(rows)
 
 

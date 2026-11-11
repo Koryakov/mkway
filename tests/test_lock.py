@@ -192,11 +192,12 @@ def test_profile_targets_open_and_expire(task):
     assert _reason(shell(task, "echo 1 > conf/x.json")) == "lock-closed-shell"
     code, out, err = cli(task, "lock", "open", "rules", "--minutes", "5")
     assert code == 0, err
-    lock = json.loads((task / "mkway" / "locks" / "rules.json").read_text(encoding="utf-8"))
+    marker = task / "mkway" / "state" / "locks" / "rules.json"  # changed by MW-022 (E1): the shared folder
+    lock = json.loads(marker.read_text(encoding="utf-8"))
     assert lock["name"] == "rules" and lock["state"] == "open" and lock["until"] and lock["opened_at"]
     assert _reason(edit(task, "rules/a.md")) == "allow"
     lock["until"] = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=1)).isoformat()
-    (task / "mkway" / "locks" / "rules.json").write_text(json.dumps(lock), encoding="utf-8")
+    marker.write_text(json.dumps(lock), encoding="utf-8")
     assert _reason(edit(task, "rules/a.md")) == "lock-closed-edit"
     assert cli(task, "lock", "open", "locks")[0] != 0  # `locks/` is never open
     assert cli(task, "lock", "open", "nosuch")[0] != 0
@@ -329,5 +330,5 @@ def test_start_line_lists_open_locks(task):
     profile = _profile(task)
     text = startline.render(task, task / "mkway" / "profile.json", profile, [], [], {}, session="s1")
     (line,) = [x for x in text.splitlines() if x.startswith("locks:")]
-    lock = json.loads((task / "mkway" / "locks" / "rules.json").read_text(encoding="utf-8"))
+    lock = json.loads((task / "mkway" / "state" / "locks" / "rules.json").read_text(encoding="utf-8"))  # MW-022 (E1)
     assert "rules open until " + lock["until"] in line

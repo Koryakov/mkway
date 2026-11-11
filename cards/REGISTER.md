@@ -18,3 +18,10 @@
 | MW-014 | Asks that do not stop the work | proposed | `cards/MW-014-asks` |
 | MW-015 | A session never writes the owner's words in the ledger | proposed | `cards/MW-015-ledger-by` |
 | MW-016 | Version in code, tag in git | proposed | `cards/MW-016-version` |
+| MW-017 | Lead role | proposed | `cards/MW-017-lead-role` |
+| MW-018 | Messaging order | proposed | `cards/MW-018-messaging-order` |
+| MW-019 | Outbox check: a text leaves only after a fresh reader | proposed | `cards/MW-019-outbox-check` |
+| MW-020 | Deliverables: built from tested code, compared with a named base | proposed | `cards/MW-020-deliverables` |
+| MW-021 | Rule cards paired with tests | proposed | `cards/MW-021-rule-tests` |
+| MW-022 | Locks reach every worktree | proposed | `cards/MW-022-locks-shared` |
+| MW-023 | One tree key for green test rows | proposed | `cards/MW-023-green-tree-key` |

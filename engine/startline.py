@@ -132,6 +132,12 @@ def _locks_line(root: Path, profile, bundle: str) -> str:
     import locks
     folder = root / bundle / "locks"
     count = sum(1 for x in folder.iterdir() if x.is_file()) if folder.is_dir() else 0
+    try:  # MW-022: the markers live in the shared state folder; the older folder is counted too
+        shared = locks.lock_folder(root, profile)
+        if shared.is_dir() and not locks._same(shared, folder):
+            count += sum(1 for x in shared.iterdir() if x.is_file())
+    except (OSError, ValueError):
+        pass
     line = f"locks: {count} files in {bundle}/locks"
     try:
         opened = locks.open_locks(root, profile)
@@ -242,6 +248,28 @@ def _ledger_lines(root: Path, p) -> list:
     return [] if found is None else [f"ledger: {found[0]} rows, {found[1]} in force"]
 
 
+def _outbox_lines(root: Path, p) -> list:
+    """MW-019: `outbox: N files, M unchecked` when `outbox.dir` is set, else no line. A folder that cannot be read adds no
+    line: the start block never fails here."""
+    import outbox
+    try:
+        line = outbox.start_line(root, p)
+    except Exception:
+        return []
+    return [] if line is None else [line]
+
+
+def _deliverable_lines(root: Path, p) -> list:
+    """MW-020: `deliverables: N built, M changed since built, K delivered` when `deliverables.paths` is set, else no
+    line. A folder that cannot be read adds no line: the start block never fails here."""
+    import deliverables
+    try:
+        line = deliverables.start_line(root, p)
+    except Exception:
+        return []
+    return [] if line is None else [line]
+
+
 def _ask_lines(root: Path, p) -> list:
     """MW-014: `open asks: N (oldest <age>); past deadline: M; defaults taken since the owner's last re-seal: K`. A
     folder that cannot be read adds no line: the start block never fails here."""
@@ -250,6 +278,37 @@ def _ask_lines(root: Path, p) -> list:
         return [asks.start_line(root, p)]
     except Exception:
         return []
+
+
+def _lead_lines(root: Path, p, session) -> list:
+    """MW-017: a lead's own unacked notices; for any other session the notices unacked past `leads.escalate_hours`.
+    The start block never fails here."""
+    import leads
+    try:
+        return leads.start_lines(root, p, session)
+    except Exception:
+        return []
+
+
+def _inbox_lines(root: Path, p, session) -> list:
+    """MW-018: the unacked inbox items of a session that is no lead (a lead's lines are MW-017's). The start block never
+    fails here."""
+    import messages
+    try:
+        return messages.start_lines(profiles.shared_state_dir(root, p), session)
+    except Exception:
+        return []
+
+
+def _rules_lines(root: Path, p) -> list:
+    """MW-021: `rules: N cards, M without tests` when `rules.cards` and `rules.test_for` are set, else no line. A
+    folder that cannot be read adds no line: the start block never fails here."""
+    import rules
+    try:
+        line = rules.start_line(root, p)
+    except Exception:
+        return []
+    return [line] if line else []
 
 
 def _record_sets(row, card_id: str, status: str) -> bool:
@@ -333,6 +392,11 @@ def render(root: Path, profile_file: Path, profile, errors: list, manifest: list
     lines.extend(_agent_lines(root, p, session))
     lines.extend(_ledger_lines(root, p))
     lines.extend(_ask_lines(root, p))
+    lines.extend(_outbox_lines(root, p))
+    lines.extend(_deliverable_lines(root, p))
+    lines.extend(_lead_lines(root, p, session))
+    lines.extend(_inbox_lines(root, p, session))
+    lines.extend(_rules_lines(root, p))
     lines.append(REFUSAL_RULE)
     signal = _signal_line(root, p, env, session)
     if signal:

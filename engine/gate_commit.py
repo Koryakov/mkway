@@ -21,6 +21,7 @@ import helpers
 import logs
 import profiles
 import register
+import rules
 import runner
 
 CLI = "python mkway/engine/mkway.py"
@@ -320,7 +321,34 @@ def _commit(ctx, profile, commit):
     verdict = _content(ctx, profile, commit, taken)
     if verdict is not None:
         return verdict
+    verdict = _rules(ctx, profile, commit, taken)
+    if verdict is not None:
+        return verdict
     return _message(profile, commit, card_id if is_open else None)
+
+
+def _rules(ctx, profile, commit, taken):
+    """Rule 6 (MW-021, `rule-without-test`): a commit that adds or changes a rule card (`rules.cards`, the id read by
+    `ids.rule_card`) must take its test file (`rules.test_for`) too, new or changed. A test changed without its card,
+    a deleted card and a file with no id in its name are not refused. Off until both `rules` keys are set."""
+    if not rules.active(profile):
+        return None
+    taking = {rel for status, rel, _source in taken if status != "D"}
+    lacking = []
+    for rel in sorted(taking):
+        ident = rules.is_card(profile, rel)
+        if ident and rules.test_path(profile, ident) not in taking:
+            lacking.append((rel, rules.test_path(profile, ident)))
+    if not lacking:
+        return None
+    detail = "; ".join(f"{card} needs {test} ({'it is not staged' if (ctx.root / test).is_file() else 'it does not exist'})"
+                       for card, test in lacking[:SHOWN])
+    detail += f"; and {len(lacking) - SHOWN} more" if len(lacking) > SHOWN else ""
+    tests = " ".join(dict.fromkeys(test for _card, test in lacking))
+    where = " and name it after `--`" if commit.paths and not commit.include else ""
+    return gate.refuse("rule-without-test", f"a rule card goes in with its test: {detail}. Write the test (red "
+                                            f"first) and stage it with `git add {tests}`{where}, or leave the card out: "
+                                            f"{_way_out(commit, [card for card, _test in lacking])}")
 
 
 def _message(profile, commit, card_id):

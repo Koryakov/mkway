@@ -3,6 +3,15 @@
 Each release lists its cards, one line each, with the id and the title of the register (`cards/REGISTER.md`). A test
 keeps this file and the register in step.
 
+## 0.2.0
+- MW-017: Lead role
+- MW-018: Messaging order
+- MW-019: Outbox check: a text leaves only after a fresh reader
+- MW-020: Deliverables: built from tested code, compared with a named base
+- MW-021: Rule cards paired with tests
+- MW-022: Locks reach every worktree
+- MW-023: One tree key for green test rows
+
 ## 0.1.0
 - MW-001: Engine skeleton
 - MW-002: mkway v1 part 1, the core

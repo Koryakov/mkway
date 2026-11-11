@@ -5,7 +5,10 @@ from _engine import ENGINE
 from _mw012 import calls, form_entry, make_root, run, unclassed_entry
 
 FORM = {"owner_ask.edit", "owner_ask.stop", "search",
-        "owner_ask.notify", "owner_ask.remind"}  # changed by MW-014 (port): the two entries added to the form gate owner_ask
+        "owner_ask.notify", "owner_ask.remind",  # changed by MW-014 (port): the two entries added to the form gate owner_ask
+        "lead.edit", "lead.shell", "lead.remind",  # changed by MW-017 (E8): the lead gate is a form gate
+        "outbox_check.pre",  # changed by MW-019 (E16): the outbox write gate is class form; its record and reminder are integrity
+        "message.send", "message.remind", "message.stop"}  # changed by MW-018 (E12): the message gate is a form gate
 
 
 def _manifest():

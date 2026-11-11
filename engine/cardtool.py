@@ -20,6 +20,7 @@ from typing import Optional
 
 import ledger
 import logs
+import outbox
 import profiles
 import records
 import register
@@ -257,18 +258,38 @@ def close_problem(root: Path, profile, card_id: str):
 NE = "not established"
 
 
+def unchecked_outbox(root: Path, profile, card_id: str, text: str) -> None:
+    """MW-019: refuse `close-unchecked-outbox` while an Acceptance row names a file under `outbox.dir` whose check is not
+    valid (the owner's close and the orderer's close both come here)."""
+    problem = outbox.close_problem(root, profile, card_id, text)
+    if problem:
+        raise CardError(problem, reason="close-unchecked-outbox")
+
+
+def unbuilt_deliverables(root: Path, profile, card_id: str, text: str) -> None:
+    """MW-020: refuse `close-deliverable-unbuilt` while an Acceptance row names a deliverable that was not built from its
+    current text, then `base-unknown` for a path that needs a delivered base and has none (the owner's close and the
+    orderer's close both come here)."""
+    import deliverables
+    problem = deliverables.close_problem(root, profile, card_id, text)
+    if problem:
+        raise CardError(problem[1], reason=problem[0])
+
+
 def approver(profile) -> str:
     """`orderer` or `owner-only` (the default): who makes a session's `card close` pass (`cards.approver`)."""
     cards = profile.get("cards") if isinstance(profile, dict) else None
     return "orderer" if isinstance(cards, dict) and cards.get("approver") == "orderer" else "owner-only"
 
 
-def seen_sessions(state) -> tuple:
+def seen_sessions(state, shared=None) -> tuple:
     """({session id: last-seen time or ""}, rows with no session id): every session id in the shell records and the
-    agent records (a search is a shell record). A record without an id (the payload did not give one) is counted,
+    agent records (a search is a shell record), and with `shared` (the shared state folder, MW-017) every session of
+    its `sessions.jsonl`. A record without an id (the payload did not give one) is counted,
     never listed; the owner's own records carry no session and count nowhere."""
     import agents
     import records
+    import sessions
     seen: dict = {}
     missing = 0
 
@@ -285,6 +306,9 @@ def seen_sessions(state) -> tuple:
             note(row.get("session_id"), [row.get("time")])
     for row in agents.rows(state):
         note(row.get("session_id"), [row.get("started"), row.get("ended")])
+    if shared is not None:
+        for sid, (stamp, _root) in sessions.latest(shared).items():
+            seen[sid] = max(seen.get(sid, ""), stamp)
     return seen, missing
 
 
@@ -294,12 +318,13 @@ def card_ref(profile, text: str) -> str:
     return f"{prefix(profile)}-{int(text):03d}" if re.fullmatch(r"[0-9]+", text) else text
 
 
-def resolve_session(state, who: str) -> str:
-    """`owner`, or the one session id seen in the state records that `who` names (the whole id, else a prefix that
-    matches exactly one); `give-unknown` or `give-ambiguous` (with the candidates) otherwise."""
+def resolve_session(state, who: str, shared=None) -> str:
+    """`owner`, or the one session id seen in the state records (and the shared sessions file) that `who` names (the
+    whole id, else a prefix that matches exactly one); `give-unknown` or `give-ambiguous` (with the candidates)
+    otherwise."""
     if who == register.OWNER:
         return who
-    ids = sorted(seen_sessions(state)[0])
+    ids = sorted(seen_sessions(state, shared)[0])
     if who and who in ids:
         return who
     found = [i for i in ids if who and i.startswith(who)]
@@ -317,7 +342,7 @@ def give(root: Path, profile, state, card: str, who: str) -> tuple:
     card_id = card_ref(profile, card)
     if register.find(register.read(root, profile), card_id) is None:
         raise CardError(f"{card_id} is not in the register", reason="card-unknown")
-    value = resolve_session(state, who)
+    value = resolve_session(state, who, profiles.shared_state_dir(root, profile))
     if register.file_has_orderer(root, profile) is not True:
         raise CardError(f"the register has no `{register.orderer_column(profile)}` column; the owner adds it with "
                         f"`mkway card resync --add-ordered-by` in their own terminal", reason="give-no-column")
@@ -527,7 +552,11 @@ def move(root: Path, profile, card_id: str, target: str, *, session: bool, recor
             raise CardError(f"{card_id} is {status}; the orderer closes an open or waiting card",
                             reason="card-bad-move")
         text = card_file(root, profile, card_id).read_text(encoding="utf-8")
-        problem = close_problem(root, profile, card_id) or tests_problem(root, profile, test_nodes(text))
+        problem = close_problem(root, profile, card_id)
+        if problem is None:
+            unchecked_outbox(root, profile, card_id, text)  # MW-019: before the tests run
+            unbuilt_deliverables(root, profile, card_id, text)  # MW-020
+            problem = tests_problem(root, profile, test_nodes(text))
         if problem:
             raise CardError(f"{card_id} cannot close: {problem}. Every Acceptance row's test must pass now (a missing "
                             f"test is a failure): fix the code or the row, then close again",
@@ -537,6 +566,9 @@ def move(root: Path, profile, card_id: str, target: str, *, session: bool, recor
         if problem:
             raise CardError(f"{card_id} cannot close: {problem}. Every Acceptance row names a test node under the "
                             f"test roots", reason="close-row-without-test")
+        text = card_file(root, profile, card_id).read_text(encoding="utf-8")
+        unchecked_outbox(root, profile, card_id, text)
+        unbuilt_deliverables(root, profile, card_id, text)  # MW-020
     # H1 (R54), close-fix 10 (A(c)): Paths are recorded once, at the first open from `proposed`; a re-open (`card open`
     # of an open card, or from `waiting`, `waiting-owner` or `closed`) never records them, light mode included. The
     # decision reads the sealed register's status only: no env, no profile, no command. `record_paths` is kept for

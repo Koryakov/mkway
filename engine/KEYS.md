@@ -1,13 +1,14 @@
 # Engine keys
 
 Two lists. **Profile keys**: the 75 draft keys of the branch profile, each «in schema now» (with the schema path it
-maps to) or «later (stays a knot)». **Engine defaults**: the 31 engine-default keys of the port map and one engine
-constant (`lock_gate.git_builtins`, MW-003), each in `defaults.json` or marked with the reason it is not.
+maps to) or «later (stays a knot)». **Engine defaults**: the 31 engine-default keys of the port map, one engine
+constant (`lock_gate.git_builtins`, MW-003) and one engine default that is also a profile key (`locks.targets`,
+MW-018), each in `defaults.json` or marked with the reason it is not.
 
 Notes:
 - «In schema now» = the keys slice 1 reads (bundle, items, gates, product checks, Python command, state folder, ids)
-  plus the one per-machine slot. The later groups `ledger`, `locks`, `handback`, `outbox` are declared optional and
-  empty in `profile.schema.json`.
+  plus the one per-machine slot. The later groups `ledger`, `locks`, `handback` are declared optional and
+  empty in `profile.schema.json`; the group `outbox` has its three keys (MW-019).
 - The Q2 frame names «statuses» under `items`; no draft key holds it today, so it is not declared (no key is invented).
 
 ## Profile keys (75)
@@ -37,13 +38,13 @@ Notes:
 | 21 | `locks.record` | later (stays a knot) | - | the `locks` group stays empty until the lock hooks are ported |
 | 22 | `locks.names` | later (stays a knot) | - | the `locks` group stays empty until the lock hooks are ported |
 | 23 | `locks.marker` | later (stays a knot) | - | the `locks` group stays empty until the lock hooks are ported |
-| 24 | `outbox.dir` | later (stays a knot) | - | the `outbox` group stays empty until the outbox check is ported |
-| 25 | `outbox.id_patterns_file` | later (stays a knot) | - | the `outbox` group stays empty until the outbox check is ported |
-| 26 | `outbox.checkers` | later (stays a knot) | - | the `outbox` group stays empty until the outbox check is ported |
+| 24 | `outbox.dir` | in schema now | `outbox.dir` | the folder of the files made for someone outside the session (the owner, a customer); a relative path; no default: with no folder there is no outbox, no start line and no check (MW-019) |
+| 25 | `outbox.id_patterns_file` | in schema now | `outbox.id_patterns_file` | a task-supplied file of regexes, one per line (blank lines and `#` lines skipped), that a checked text must not match; the engine never holds a pattern; no default: with no file there is no scan (MW-019) |
+| 26 | `outbox.checkers` | in schema now | `outbox.checkers` | the agent types that may sign a check, a non-empty list of strings; no default: with none, no check is valid (MW-019) |
 | 27 | `plan.always` | later (stays a knot) | - | plan gate; not slice 1 |
 | 28 | `number_bases.bases` | later (stays a knot) | - | data of a product checker; no hook reads it |
 | 29 | `number_bases.shapes` | later (stays a knot) | - | data of a product checker; no hook reads it |
-| 30 | `customer_ids` | later (stays a knot) | - | a product's id patterns, named by the outbox check |
+| 30 | `customer_ids` | in schema now | `outbox.id_patterns_file` | no key of its own: a product's id patterns are lines of the file `outbox.id_patterns_file` names, so the key folds into it; default none (MW-019) |
 | 31 | `decision_search.ledger` | later (stays a knot) | - | decision search tool; not slice 1 |
 | 32 | `decision_search.log_file` | later (stays a knot) | - | decision search tool; not slice 1 |
 | 33 | `decision_search.cache_dir` | later (stays a knot) | - | decision search tool; not slice 1 |
@@ -117,7 +118,16 @@ Not in the map's 75. Verdicts: «in schema now» (with its schema path), «later
 | `owner_ask.max_open` | in schema now | `owner_ask.max_open` | a whole number from 1; default `1` | how many asks with `status: open` one session may have; a new ask file while the session has that many is refused `ask-already-open`: add to the open ask, or wait (MW-014) |
 | `owner_ask.tool_allowed` | in schema now | `owner_ask.tool_allowed` | `true` or `false`; default `false` | `false`: the pop-up question tool `AskUserQuestion` is refused `ask-tool-off` and the text names the file route; `true`: the gate allows it, and the search gate still judges it (MW-014) |
 | `notify.command` | in schema now | `notify.command` | a command line with the placeholders `{file}` (the ask file) and `{line}` (the question, the default and the deadline); default none: nothing runs | run after an ask file is written, read by the engine and never by a shell, 10 seconds at most; a failure is logged `notify-failed` and never blocks; the engine ships no channel (MW-014) |
+| `leads.escalate_hours` | in schema now | `leads.escalate_hours` | hours, a number above 0; default `4` | a notice in a lead's inbox that stays unacked this long shows in `mkway leads` and in the start block of a session that is no lead (MW-017) |
+| `leads.max_cards` | in schema now | `leads.max_cards` | a whole number from 1; default `5` | a lead with more cards ordered and not closed than this gets a warning line in `mkway leads`; never a refusal (MW-017) |
+| `messaging.duplicate_window_hours` | in schema now | `messaging.duplicate_window_hours` | hours, a number above 0; default `1` | the same body (white space around it ignored) sent to a second recipient inside this window is refused `message-duplicate`; the same body to one recipient is not (MW-018) |
+| `messaging.dead_hours` | in schema now | `messaging.dead_hours` | hours, a number above 0; default `12` | a session last seen (the shared `sessions.jsonl`) longer ago than this is dead: `mkway send` writes the message to `dead-letter.jsonl` and tells the sender's lead (MW-018) |
+| `messaging.ack_reminder_minutes` | in schema now | `messaging.ack_reminder_minutes` | minutes, a number above 0; default `30` | a Stop with an unacked order older than this gets a reminder line `orders-unacked`; never a block (MW-018) |
 | `agents.cap_minutes` | in schema now | `agents.cap_minutes` | minutes, a number above 0; default 30 | the start block lists each agent of the session that ran longer, or has a start row with no end row (MW-004) |
+| `deliverables.paths` | in schema now | `deliverables.paths` | globs of result files made for others; non-empty list; default none (no deliverables, no start line) | `mkway built <path>` records where such a file came from; `card close` refuses `close-deliverable-unbuilt` for an Acceptance row that names one that was not built; may overlap `outbox.dir` (MW-020) |
+| `deliverables.require_base` | in schema now | `deliverables.require_base` | globs of paths; non-empty list; default none | a file that matches needs the line `base: <sha8>` in its check file, equal to a row of `delivered.jsonl`, else `base-unknown` (MW-020) |
+| `rules.cards` | in schema now | `rules.cards` | globs of rule-card files; non-empty list; default none (the check is off until both `rules` keys are set) | the id of a card is read from its file name by the form `ids.rule_card`; a commit that adds or changes a card must take its test too, else `rule-without-test` (MW-021) |
+| `rules.test_for` | in schema now | `rules.test_for` | a test path that holds `{id}`; default none | the path of a card's test, `{id}` replaced by the card id; `mkway rules` lists each card with this test and the last green tree (MW-021) |
 | `commit.junk` | in schema now | `commit.junk` | non-empty list of patterns; a name or glob matches at any depth, a trailing `/` names a folder; default `__pycache__/`, `*.pyc`, `.pytest_cache/`, `.pytest_tmp/`, `*.log`, `*.tmp`, `*.orig`, `*.rej`, `.DS_Store`, `Thumbs.db` | files a commit never holds: `junk-file-staged` (MW-006) |
 | `commit.data_patterns` | in schema now | `commit.data_patterns` | non-empty list of patterns, by extension; default `*.csv`, `*.tsv`, `*.xlsx`, `*.xls`, `*.parquet`, `*.db`, `*.sqlite`, `*.sqlite3`, `*.bak`, `*.dump` | data files a commit never holds, whatever `.gitignore` says: `data-file-staged` (MW-006) |
 | `commit.max_file_kb` | in schema now | `commit.max_file_kb` | a number above 0; default `1024` | the largest file, in KB, a commit may hold: `file-too-large` (MW-006) |
@@ -125,6 +135,7 @@ Not in the map's 75. Verdicts: «in schema now» (with its schema path), «later
 | `gates.commit_tests.budget_seconds` | in schema now | `gates` | seconds (a number above 0); default `780`; the manifest hook timeout is 900, so a run is stopped at 840 s at most | a run over it refuses the commit (`commit-tests-over-budget`); the owner raises it in the profile in their own terminal (MW-005) |
 | `delete.max_backup_mb` | in schema now | `delete.max_backup_mb` | a number above 0; default `5120` | the largest backup, in MB, a delete may make before it runs; above it the delete is refused `delete-too-large` (MW-009) |
 | `delete.sql_allowed` | in schema now | `delete.sql_allowed` | a boolean; default `false` | `true` turns off the refusal of destructive SQL `delete-sql`, for a task with a scratch database (MW-009) |
+| lock marker folder | no key | - | `<shared state dir>/locks/<name>.json`, the shared state folder of `profiles.shared_state_dir`; an older `<bundle.root>/locks/<name>.json` is still read for one version, closed wins | no profile key names the folder: the hold and every lock target reach every work tree of the repository (MW-022) |
 | `bundle.track_copy` | proposed | - | `true` or `false`; `false` would keep today's behaviour | tracking the engine copy is the owner's call per project (R9); with `true`, `mkway install` would leave `engine/` out of the bundle's ignore lines. Proposed by the MW-002 order; not built |
 | profile location | no key | - | by convention `<root>/mkway/profile.json`, or `--profile <path>` (a relative path is read from the root) | no profile key holds the profile's location (MW-002 closes the earlier «not established») |
 
@@ -178,6 +189,7 @@ A defaults.json key that is not in the schema is an engine constant: the profile
 | `decision_search` | `formats` | in defaults.json | read at the pin; the ledger and record-key format |
 | `decision_search` | `language` | later (natural-language content; needs an owner read) | natural-language text at the pin; never copied |
 | `decision_search` | `texts` | later (natural-language content; needs an owner read) | natural-language text at the pin; never copied |
+| `locks` | `targets` | in defaults.json | an engine default of MW-018, not from the port map: the lock target `inbox` (`<state.dir>/inbox/**` and `<state.dir>/pings.jsonl`, `<state.dir>` taken at the profile's state folder), closed like every lock, so only `mkway send` and `mkway ack` write the rows; the key is in the schema too, so a profile adds its own targets beside it, and a profile target named `inbox` is ignored |
 | `lock_gate` | `git_builtins` | in defaults.json | an engine constant (MW-003 close-fix 8, R90), not from the port map: git's built-in commands; a subcommand not in it refuses `command-unparsed`. «unverified»: written from knowledge, because `git --list-cmds=builtins` and `git help -a` were refused in the building session; `mkway check` compares it with `git --list-cmds=builtins` in the owner's terminal and warns on a difference |
 
-Split: 25 in `defaults.json`, 7 later, 0 not established.
+Split: 26 in `defaults.json`, 7 later, 0 not established (`locks.targets` is the engine's own default of MW-018).

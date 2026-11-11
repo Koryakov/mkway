@@ -29,7 +29,6 @@ PLANNED = [
     ("session_start", "session_start", "start", "SessionStart", None, 10, "none", None),
     ("derived_files.edit", "derived_files.edit", "edit", "PreToolUse", EDITS, 60, "block", "edit"),
     ("row_file_guard", "row_file_guard", "edit", "PreToolUse", EDITS, 10, "block", None),
-    ("outbox_check.pre", "outbox_check.pre", "edit", "PreToolUse", EDITS, 30, "none", "pre"),
     ("commit_check", "commit_check", "shell", "PreToolUse", SHELL, 240, "block", None),
     ("downstream_gate", "downstream_gate", "shell", "PreToolUse", SHELL, 60, "block", None),
     ("bash_speed_guard", "bash_speed_guard", "shell", "PreToolUse", SHELL, 10, "none", None),
@@ -45,14 +44,19 @@ PLANNED = [
      "pre"),
     ("owner_message", "owner_message", "prompt", "UserPromptSubmit", None, 10, "none", None),
     ("own_files_stop", "own_files_stop", "stop", "Stop", None, 30, "none", None),
-    ("outbox_check.stop", "outbox_check.stop", "stop", "Stop", None, 30, "none", "stop"),
 ]
 # MW-003: the map rows a written gate replaces, and the deleted lock_notice entries (D-1)
 REPLACED = {"rule_lock": "lock", "card_test_lock": "lock", "rule_code_lock": "lock", "process_lock": "lock",
             "discussion_freeze": "lock", "subtask_gate": "subtask", "lock_notice.session_start": "start line",
             "lock_notice.post_tool_use": "start line", "lock_notice.user_prompt_submit": "start line"}
+# MW-019: planned entries that a written gate took over under the same name (they are `on` now, see ON)
+WRITTEN_IN_PLACE = ("outbox_check.pre", "outbox_check.stop")
 # MW-003: the gates the engine runs (status on): (name, gate, group, event, matcher, function, onFailure)
 ON = [
+    # changed by MW-017 (E8): the lead gate (form) runs first in the edit and shell groups, so a lead's refusal names the
+    # lead rule and not `no-open-card`; its prompt reminder runs before the other reminders
+    ("lead.edit", "lead", "edit", "PreToolUse", "Edit|Write|MultiEdit|NotebookEdit", "gate_lead:edit", "block"),
+    ("lead.shell", "lead", "shell", "PreToolUse", SHELL, "gate_lead:shell", "block"),
     ("lock.edit", "lock", "edit", "PreToolUse", "Edit|Write|MultiEdit|NotebookEdit", "gate_lock:check", "block"),
     ("subtask", "subtask", "edit", "PreToolUse", "Edit|Write|MultiEdit|NotebookEdit", "gate_subtask:check", "block"),
     # changed by MW-007 (E10): the owner-ask edit gate runs after the lock and subtask gates of the edit group
@@ -65,6 +69,8 @@ ON = [
     # changed by MW-006 (E6): the record of the paths a session wrote, one entry per group, after the gates that refuse
     ("touched.edit", "commit_files", "edit", "PreToolUse", "Edit|Write|MultiEdit|NotebookEdit", "gate_commit:touch",
      "block"),
+    # changed by MW-019 (E16): the outbox write gate: a check file's `sha256:` line must be the document's
+    ("outbox_check.pre", "outbox_check.pre", "edit", "PreToolUse", EDITS, "gate_outbox:check", "block"),
     ("lock.shell", "lock", "shell", "PreToolUse", SHELL, "gate_lock:check", "block"),
     ("touched.shell", "commit_files", "shell", "PreToolUse", SHELL, "gate_commit:touch", "block"),
     # changed by MW-006 (E7-E23): the commit gate itself, after the recorder of its group
@@ -73,6 +79,8 @@ ON = [
     ("delete", "delete", "shell", "PreToolUse", SHELL, "gate_delete:check", "block"),
     # changed by MW-005 (E18): the test run is the slow gate, so it runs after the cheap file checks of `commit_files`
     ("commit_tests", "commit_tests", "shell", "PreToolUse", SHELL, "gate_commit_tests:check", "block"),
+    # changed by MW-018 (E12): the SendMessage gate has its own group `message`; it fails open (`onFailure: none`)
+    ("message.send", "message", "message", "PreToolUse", "SendMessage", "gate_message:check", "none"),
     ("records", "records", "post", "PostToolUse", SHELL, "gate_records:record", "none"),
     # changed by MW-004 (E9): the agent records, one entry per event, both on the gate `agents`; no matcher (every agent)
     ("agent_start", "agents", "post", "SubagentStart", None, "gate_agents:start", "none"),
@@ -80,18 +88,27 @@ ON = [
     # changed by MW-003 list item 5 (R43 (c)): the reminder of unresolved write targets at the next prompt
     # changed by MW-014 (E7): the notify step after a write of an ask file; it never blocks
     ("owner_ask.notify", "owner_ask", "post", "PostToolUse", "Write|Edit|MultiEdit", "gate_owner_ask:check", "none"),
+    # changed by MW-019 (E16): the record of a write of a check file, the proof of which session wrote it
+    ("outbox_check.post", "outbox_check.post", "post", "PostToolUse", EDITS, "gate_outbox:check", "none"),
+    ("lead.remind", "lead", "prompt", "UserPromptSubmit", None, "gate_lead:remind", "none"),
     ("unresolved", "unresolved", "prompt", "UserPromptSubmit", None, "gate_lock:remind", "none"),
     # changed by MW-014 (E12): the reminder of an ask past its deadline, at the next prompt
     ("owner_ask.remind", "owner_ask", "prompt", "UserPromptSubmit", None, "gate_owner_ask:check", "none"),
+    # changed by MW-018 (E12): the reminder of a session's unacked inbox items at the next prompt
+    ("message.remind", "message", "prompt", "UserPromptSubmit", None, "gate_message:remind", "none"),
     # changed by MW-007 (E15): the owner-ask stop gate, the same gate and function as `owner_ask.edit`
     ("owner_ask.stop", "owner_ask", "stop", "Stop", None, "gate_owner_ask:check", "none"),
+    # changed by MW-018 (E8): the reminder of an old unacked order at a Stop; never a block
+    ("message.stop", "message", "stop", "Stop", None, "gate_message:stop", "none"),
+    # changed by MW-019 (E15): the reminder of a file changed after its check; it never blocks
+    ("outbox_check.stop", "outbox_check.stop", "stop", "Stop", None, "gate_outbox:check", "none"),
 ]
 OFF_TODAY = ["code_lock", "handback_gate", "quality_gate", "st_gate", "step_close", "subtask_lint",
              "test_verdict_gate"]
 FIELDS = {"name", "gate", "group", "function", "reason_ids", "event", "matcher", "timeout", "onFailure", "mode",
           "status", "default_on", "class"}  # changed by MW-012 (E1): every entry names its class
 ON_FIELDS = FIELDS | {"on_failure_reason"}  # MW-003 decision 5: one line per gate
-GROUPS = {"start", "edit", "shell", "post", "prompt", "stop"}
+GROUPS = {"start", "edit", "shell", "post", "prompt", "stop", "message"}  # changed by MW-018 (E12): `message`
 HOME = re.compile(r"~[/\\]|[A-Za-z]:[/\\]+Users|/Users/|/home/|\$HOME|USERPROFILE|\.claude[/\\]projects", re.I)
 
 
@@ -106,7 +123,7 @@ def test_planned_entries_are_the_27_registered_engine_commands():
     planned = [e for e in _entries() if e["status"] == "planned"]
     got = [(e["name"], e["gate"], e["group"], e["event"], e["matcher"], e["timeout"], e["onFailure"], e["mode"])
            for e in planned]
-    assert len(PLANNED) + len(REPLACED) == 27
+    assert len(PLANNED) + len(REPLACED) + len(WRITTEN_IN_PLACE) == 27  # changed by MW-019
     assert got == PLANNED
     assert sum(1 for e in planned if e["onFailure"] == "block") == 14 - 5
     for e in planned:  # no gate code yet: nothing the dispatcher could load
@@ -127,8 +144,10 @@ def test_on_entries_carry_function_reasons_and_on_failure_reason():
         reason = e["on_failure_reason"]
         assert isinstance(reason, str) and reason.strip() and "\n" not in reason, e["name"]
         # changed by MW-008 (E16): the one edit gate that fails open is `search` (its own entry says so)
-        assert (e["onFailure"] == "block") == (e["group"] in ("edit", "shell") and e["name"] != "search"), e["name"]
-        if e["name"] == "search":
+        # changed by MW-018 (E12): the `message` entry fails open too (its own entry says so)
+        assert (e["onFailure"] == "block") == (e["group"] in ("edit", "shell")
+                                               and e["name"] not in ("search", "message.send")), e["name"]
+        if e["name"] in ("search", "message.send"):
             assert "fails open" in e["on_failure_reason"], e["name"]
         assert e["default_on"] is True
 
@@ -147,7 +166,7 @@ def test_entries_carry_all_fields():
     """E14 (changed by MW-002 E4): every entry carries exactly the field set (with group, function and reason_ids,
     and no script); only the two statuses exist; a group is one of the six; names are unique."""
     entries = _entries()
-    assert len(entries) == 34 - len(REPLACED) + len(ON)  # changed by MW-003
+    assert len(entries) == 34 - len(REPLACED) + len(ON) - len(WRITTEN_IN_PLACE)  # changed by MW-003; MW-019: two `on` entries were planned
     for e in entries:
         extra = {"note", "user_home_read"} if e["name"] == "own_files_stop" else set()
         assert set(e) - extra == (ON_FIELDS if e["status"] == "on" else FIELDS), e.get("name")
@@ -189,7 +208,8 @@ def test_group_table_sets_on_failure():
     table = data["groups"]
     assert set(table) == GROUPS
     assert {g: v.get("onFailure") for g, v in table.items()} == {
-        "start": None, "edit": "block", "shell": "block", "post": None, "prompt": None, "stop": None}
+        "start": None, "edit": "block", "shell": "block", "post": None, "prompt": None, "stop": None,
+        "message": None}
     assert all(set(v) <= {"onFailure"} for v in table.values())
     assert {e["group"] for e in data["entries"]} - {NE} <= set(table)
     # fix check N4: the dispatcher's blocking groups are the table's `onFailure: block` groups

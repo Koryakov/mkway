@@ -33,7 +33,8 @@
       {"name": "claims", "regex": "claims: \\d+ checked, 0 overstated, 0 without basis", "example": "`claims: N checked, 0 overstated, 0 without basis`"},
       {"name": "patterns", "regex": "patterns: clean", "example": "`patterns: clean`"},
       {"name": "links", "regex": "links: clean", "example": "`links: clean`"},
-      {"name": "checker", "regex": "checker: (\\S+)", "one_of": "checkers", "example": "`checker: <agent type>`"}
+      {"name": "checker", "regex": "checker: (\\S+)", "one_of": "checkers", "example": "`checker: <agent type>`"},
+      {"name": "base", "regex": "(?m)^[ \\t]*base:[ \\t]*([0-9a-fA-F]{8})[ \\t]*$", "optional": true, "equals": "delivered_sha8", "example": "`base: <sha8>`"}
     ]
   },
   "decision_search": {
@@ -50,6 +51,9 @@
       "owner_keys": ["owner_text"],
       "chat_keys": ["head", "session"]
     }
+  },
+  "locks": {
+    "targets": [{"name": "inbox", "paths": ["<state.dir>/inbox/**", "<state.dir>/pings.jsonl"]}]
   },
   "lock_gate": {
     "git_builtins": ["add", "am", "annotate", "apply", "archive", "bisect", "blame", "branch", "bugreport", "bundle",

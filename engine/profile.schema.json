@@ -195,9 +195,29 @@
     },
     "outbox": {
       "type": "object",
-      "properties": {},
       "additionalProperties": false,
-      "description": "later: folder, id patterns file, checkers"
+      "description": "the outbox check (MW-019): files made for someone outside the session count as checked only with a check file beside them",
+      "properties": {
+        "dir": {
+          "type": "string",
+          "format": "relative-path",
+          "description": "the folder of the files made for someone outside the session (the owner, a customer); no default: with no folder there is no outbox"
+        },
+        "checkers": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "the agent types that may sign a check; no default: with none, no check is valid"
+        },
+        "id_patterns_file": {
+          "type": "string",
+          "format": "relative-path",
+          "description": "a task-supplied file of regexes, one per line, that a checked text must not match; the engine ships none"
+        }
+      }
     },
     "python": {
       "type": "object",
@@ -346,6 +366,45 @@
         }
       }
     },
+    "leads": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "the lead role (MW-017); every key has a default, so the object may be absent or empty",
+      "properties": {
+        "escalate_hours": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "hours a notice may stay unacked before the owner sees it in `mkway leads` and in the start block of a session that is no lead; default 4 (MW-017)"
+        },
+        "max_cards": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "cards (not closed) one lead may have ordered before `mkway leads` prints a warning line, never a refusal; default 5 (MW-017)"
+        }
+      }
+    },
+    "messaging": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "messages between sessions (MW-018); every key has a default, so the object may be absent or empty",
+      "properties": {
+        "duplicate_window_hours": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "hours inside which the same body to a second recipient is refused `message-duplicate`; default 1 (MW-018)"
+        },
+        "dead_hours": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "hours after which a session last seen is dead: a send to it goes to the dead letter; default 12 (MW-018)"
+        },
+        "ack_reminder_minutes": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "minutes an order may stay unacked before a Stop gets a reminder line, never a block; default 30 (MW-018)"
+        }
+      }
+    },
     "notify": {
       "type": "object",
       "additionalProperties": false,
@@ -424,6 +483,52 @@
           "type": "number",
           "exclusiveMinimum": 0,
           "description": "the largest file, in KB, a commit may hold; default 1024"
+        }
+      }
+    },
+    "deliverables": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "deliverables built from tested code and compared with a named base (MW-020)",
+      "properties": {
+        "paths": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "globs of the result files made for others; may overlap `outbox.dir`; default none"
+        },
+        "require_base": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "globs of the paths whose check file must name a delivered base (`base: <sha8>`); default none"
+        }
+      }
+    },
+    "rules": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "rule cards paired with tests (MW-021); the check is on only when both keys are set",
+      "properties": {
+        "cards": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "globs of the rule-card files; the id is read from the file name by the form `ids.rule_card`; default none"
+        },
+        "test_for": {
+          "type": "string",
+          "pattern": "\\{id\\}",
+          "description": "the test path of a card, with `{id}` for the card id, e.g. tests/rules/{id}/test_{id}.py; default none"
         }
       }
     },

@@ -68,6 +68,37 @@ def state_dir(root: Path, profile) -> Path:
     return Path(root) / (value if _valid_relative(value) else DEFAULT_STATE_DIR)
 
 
+_SHARED: dict = {}  # (root, state dir) -> the shared dir: resolved once per process (MW-017, addition 1)
+
+
+def _linked_main_state(root: Path, own: Path) -> Path:
+    """`<main work tree root>/<the same path below the top>/<state.dir>` when `root` is in a linked git work tree (its
+    git dir is not the common one), else `own`. Raises on anything unreadable: the caller then takes `own`."""
+    import runner
+    probes = [runner.git(root, "rev-parse", flag) for flag in ("--git-common-dir", "--git-dir", "--show-toplevel")]
+    if any(p.returncode != 0 for p in probes):
+        return own
+    common, gitdir, top = (Path(root, p.stdout.strip()).resolve() for p in probes)
+    if common == gitdir or common.name != ".git":
+        return own
+    below = Path(root).resolve().relative_to(top)
+    return common.parent / below / own.resolve().relative_to(Path(root).resolve())
+
+
+def shared_state_dir(root: Path, profile) -> Path:
+    """Where files that cross work trees live (MW-017: `leads.json`, `inbox/`, `sessions.jsonl`). In a linked git work
+    tree it is the main work tree's state folder; in the main one, in a folder with no git, and when git fails it is
+    `state_dir`. Everything else stays in each work tree's own state folder."""
+    own = state_dir(root, profile)
+    key = (str(Path(root)), str(own))
+    if key not in _SHARED:
+        try:
+            _SHARED[key] = _linked_main_state(Path(root), own)
+        except Exception:  # git missing, a timeout, a state folder outside the root: the own folder
+            _SHARED[key] = own
+    return _SHARED[key]
+
+
 OWNER_ASK_DIR = "asks"  # inside the bundle: `<bundle.root>/asks`, unless the profile names a folder (MW-007)
 OWNER_ASK_MARKERS = ["Request:"]
 OWNER_ASK_SOURCES = ["ledger"]  # MW-008: the past decisions; the name `ledger` has its own line form in the ask gate
@@ -112,6 +143,62 @@ def notify_command(profile):
     group = profile.get("notify") if isinstance(profile, dict) else None
     value = group.get("command") if isinstance(group, dict) else None
     return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def outbox_settings(profile) -> dict:
+    """The outbox check's settings (MW-019): `dir` and `patterns_file` as posix repo-relative paths, `checkers` as a
+    list of agent types. A missing or unusable value is none (an empty list for `checkers`): the engine invents no
+    folder and no checker, so a profile that names none has no outbox, or no valid check."""
+    raw = profile.get("outbox") if isinstance(profile, dict) else None
+    raw = raw if isinstance(raw, dict) else {}
+
+    def folder(value):
+        return value.replace("\\", "/").strip("/") if _valid_relative(value) else None
+    return {"dir": folder(raw.get("dir")), "checkers": _clean_strings(raw.get("checkers")) or [],
+            "patterns_file": folder(raw.get("id_patterns_file"))}
+
+
+def deliverable_settings(profile) -> dict:
+    """The deliverables settings (MW-020): `paths` (globs of the result files made for others) and `require_base`
+    (globs of the paths whose check file must name a delivered base). A missing or unusable value is an empty list:
+    the engine invents no path."""
+    raw = profile.get("deliverables") if isinstance(profile, dict) else None
+    raw = raw if isinstance(raw, dict) else {}
+    return {"paths": _clean_strings(raw.get("paths")) or [], "require_base": _clean_strings(raw.get("require_base")) or []}
+
+
+LEADS_ESCALATE_HOURS = 4  # MW-017: hours a notice may stay unacked before the owner sees it
+LEADS_MAX_CARDS = 5  # MW-017: the soft cap of cards one lead has ordered
+
+
+def leads_settings(profile) -> dict:
+    """The lead role's settings (MW-017): `escalate_hours`, `max_cards`. An unusable value takes its default, as the
+    other accessors do, so a gate never fails on a bad key."""
+    raw = profile.get("leads") if isinstance(profile, dict) else None
+    raw = raw if isinstance(raw, dict) else {}
+    hours, cap = raw.get("escalate_hours"), raw.get("max_cards")
+    if isinstance(hours, bool) or not isinstance(hours, (int, float)) or not hours > 0:
+        hours = LEADS_ESCALATE_HOURS
+    if isinstance(cap, bool) or not isinstance(cap, int) or cap < 1:
+        cap = LEADS_MAX_CARDS
+    return {"escalate_hours": hours, "max_cards": cap}
+
+
+MESSAGING_DEFAULTS = {"duplicate_window_hours": 1, "dead_hours": 12, "ack_reminder_minutes": 30}  # MW-018
+
+
+def messaging_settings(profile) -> dict:
+    """The messaging keys (MW-018): `duplicate_window_hours`, `dead_hours`, `ack_reminder_minutes`. An unusable value
+    (not a number above 0, a boolean included) takes its default, as the other accessors do, so a gate never fails on a
+    bad key."""
+    raw = profile.get("messaging") if isinstance(profile, dict) else None
+    raw = raw if isinstance(raw, dict) else {}
+    out = {}
+    for key, default in MESSAGING_DEFAULTS.items():
+        value = raw.get(key)
+        ok = isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
+        out[key] = value if ok else default
+    return out
 
 
 DELETE_MAX_BACKUP_MB = 5120  # the largest backup a delete may make (MW-009)

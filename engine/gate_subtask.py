@@ -18,6 +18,7 @@ from __future__ import annotations
 import cardtool
 import gate
 import helpers
+import leads
 import profiles
 import register
 
@@ -48,6 +49,9 @@ def _one(ctx, profile, rel):
     card_files = f"{profiles.bundle_root(profile)}/cards/*/CARD.md"  # card files only (close check L4)
     if helpers.matches(rel, card_files) or any(helpers.matches(rel, e) for e in _exempt(profile)):
         return gate.allow()
+    if leads.is_lead(profiles.shared_state_dir(ctx.root, profile), ctx.session_id) and \
+            leads.writable(ctx.root, profile, ctx.session_id, rel):
+        return gate.allow()  # MW-017: a lead holds no card; its order file and the asks folder are its own rule's
     card_id = ctx.records.card()
     if not card_id:
         return gate.refuse("no-open-card", f"{rel}: this session holds no card. Write one with `{CLI} card new "

@@ -51,7 +51,7 @@ def test_the_section_states_the_rules_reasons_keys_and_ways_out():
     flat = _flat(_section())
     manifest = json.loads((REPO / "engine" / "manifest.json").read_text(encoding="utf-8"))["entries"]
     reasons = {r for e in manifest if e["gate"] == "commit_files" for r in e["reason_ids"]}
-    assert len(reasons) == 10
+    assert len(reasons) == 11  # changed by MW-021 (E6): `rule-without-test`
     for reason in reasons:
         assert f"`{reason}`" in flat, reason
     schema = json.loads((REPO / "engine" / "profile.schema.json").read_text(encoding="utf-8"))

@@ -26,7 +26,7 @@ def test_the_readme_has_the_owner_hold_recipe():
     assert text.count("\n" + HEADING + "\n") == 1
     body = _section()
     lines = [line for line in body.splitlines() if line.strip()]
-    assert 3 <= len(lines) <= 4, len(lines)
+    assert 3 <= len(lines) <= 5, len(lines)  # changed by MW-022 (E9): one more line, the shared marker
     flat = " ".join(body.split())
     for needed in ('locks.targets: [{"name": "hold", "paths": ["**"], "open_by_default": true}]',
                    "`mkway lock close hold`", "`mkway lock open hold`", "every session write and commit",

@@ -21,6 +21,7 @@ EXPECTED = {
     "decision_search": ["log_env", "cache_env", "noise_dir_names", "noise_files", "noise_suffixes", "formats",
                         "language", "texts"],
     "lock_gate": ["git_builtins"],  # MW-003 close-fix 8 (R90): an engine constant, not from the port map
+    "locks": ["targets"],  # MW-018 (E10): the engine default lock target `inbox`; the key is in the schema too
 }
 NL_LATER = "later (natural-language content; needs an owner read)"
 
@@ -38,7 +39,7 @@ def test_every_default_key_is_placed_once():
     """E17: each of the 31 keys of the port map, and the one engine constant added by MW-003 close-fix 8, is either in
     defaults.json or marked later / not established in KEYS.md."""
     expected = {(c, k) for c, keys in EXPECTED.items() for k in keys}
-    assert len(expected) == 32
+    assert len(expected) == 33  # changed by MW-018: `locks.targets`
     defaults = _defaults()
     in_json = {(c, k) for c, group in defaults.items() for k in group}
     marks = _marks()
@@ -68,7 +69,7 @@ MAP_TYPES = {  # the port map's types for the 23 keys of the 18 configs (section
     ("decision_search", "noise_dir_names"): list, ("decision_search", "noise_files"): list,
     ("decision_search", "noise_suffixes"): list, ("decision_search", "formats"): dict,
     ("decision_search", "language"): dict, ("decision_search", "texts"): dict,
-    ("lock_gate", "git_builtins"): list,
+    ("lock_gate", "git_builtins"): list, ("locks", "targets"): list,
 }
 
 

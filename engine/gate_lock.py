@@ -25,6 +25,7 @@ import subprocess
 import cardtool
 import gate
 import helpers
+import leads
 import locks
 import logs
 import profiles
@@ -163,14 +164,35 @@ def _call(ctx, profile, args: list):
         return _owner_only(" ".join(pos[:2]))
     if head == "gate" and pos[1:2] and pos[1] in ("off", "on", "watch"):  # `watch`: MW-012
         return _owner_only(" ".join(pos[:2]))
-    if head in ("install", "upgrade", "hold", "go", "give"):  # `hold` and `go`: the short forms of the lock close and
-        return _owner_only(head)                              # open; `give` (MW-011): only the owner says who ordered
-    if (head == "ledger" and pos[1:2] == ["add"]) or (head == "ask" and pos[1:2] == ["default"]):
-        cardtool.issue_by_permit(profiles.state_dir(ctx.root, profile), ctx.session_id)  # MW-015: names the session
+    if head in ("install", "upgrade", "hold", "go", "delivered"):  # `hold` and `go`: the short forms of the lock close
+        return _owner_only(head)                                   # and open; `delivered` (MW-020): the owner's base
+    state = profiles.state_dir(ctx.root, profile)  # the permits stay in this work tree's state folder
+    if head == "built":  # MW-020: the provenance row names the session; the CLI reads it from this one-use permit
+        cardtool.issue_by_permit(state, ctx.session_id)
+        return None
+    shared = profiles.shared_state_dir(ctx.root, profile)  # the leads cross work trees (MW-017)
+    if head == "give":  # MW-011: the owner says who ordered a card; MW-017: a registered lead's give is a hand-off
+        if not leads.is_lead(shared, ctx.session_id):
+            return _owner_only(head)
+        cardtool.issue_by_permit(state, ctx.session_id)  # the CLI reads the session id from this one-use permit
+        return None
+    if head == "lead" and pos[1:2]:  # MW-017: `lead add|remove` are the owner's; register and accept name the session
+        if pos[1] in ("add", "remove"):
+            return _owner_only(f"lead {pos[1]}")
+        if pos[1] in ("register", "accept"):
+            cardtool.issue_by_permit(state, ctx.session_id)
+        return None
+    if (head == "ledger" and pos[1:2] == ["add"]) or (head == "ask" and pos[1:2] == ["default"]) or head in (
+            "ack", "send", "inbox"):
+        cardtool.issue_by_permit(state, ctx.session_id)  # MW-015: names the session (MW-017: `ack`; MW-018: `send`, `inbox`)
         return None
     if head != "card" or len(pos) < 2:
         return None
     sub, card_id = pos[1], (pos[2] if len(pos) > 2 else None)
+    if sub == "new":  # MW-017: a lead's new card gets its order file; the CLI reads who ran it from the permit
+        if leads.is_lead(shared, ctx.session_id):
+            cardtool.issue_by_permit(state, ctx.session_id)
+        return None
     moves = _owner_moves(profile)
     if sub == "resync":
         return _owner_only("card resync")

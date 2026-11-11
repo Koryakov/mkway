@@ -23,6 +23,7 @@ def test_generate_entries_has_both_agent_events():
     entries = install.generate_entries(make_profile(), _manifest())
     assert [(e["event"], e["group"]) for e in entries] == [
         ("SessionStart", "start"), ("UserPromptSubmit", "prompt"), ("PreToolUse", "edit"), ("PreToolUse", "shell"),
+        ("PreToolUse", "message"),  # changed by MW-018 (E12): the SendMessage gate
         ("PostToolUse", "post"), ("SubagentStart", "post"), ("SubagentStop", "post"),
         ("Stop", "stop")]  # the owner-ask stop gate of MW-007 comes after the agent events
     by_event = {e["event"]: e for e in entries}
@@ -38,7 +39,8 @@ def test_the_gate_switch_drops_both_entries():
     assert {"SubagentStart", "SubagentStop"} <= {e["event"] for e in on}  # on by default, so the switch has an effect
     entries = install.generate_entries(make_profile(gates={"agents": {"on": False}}), _manifest())
     assert [e["event"] for e in entries] == ["SessionStart", "UserPromptSubmit", "PreToolUse", "PreToolUse",
-                                             "PostToolUse", "Stop"]  # `Stop`: the owner-ask gate of MW-007
+                                             "PreToolUse", "PostToolUse", "Stop"]  # `Stop`: the owner-ask gate of MW-007;
+    # the third `PreToolUse` is the SendMessage gate of MW-018
 
 
 def test_settings_hold_the_agent_entries_once(tmp_path):

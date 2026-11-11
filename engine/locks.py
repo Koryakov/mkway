@@ -6,8 +6,11 @@ bundle `.gitignore` (R18) and `.gitattributes` (R19a), the register and `<state.
 the state folder are never open: their only writers are the engine's own commands. The profile adds targets in
 `locks.targets[]`. A target in a user home folder needs a per-machine list and is off (R4).
 
-A lock is `<bundle.root>/locks/<name>.json`: `{name, state, opened_at, until}`. Only the owner's commands write it
-(`mkway lock open|close`, from their own terminal). A target is closed unless its lock is open and not expired.
+A lock is `<shared state dir>/locks/<name>.json`: `{name, state, opened_at, until}` (MW-022: the shared state folder of
+`profiles.shared_state_dir`, so a lock typed in any work tree of a repository reaches every session of it). Only the
+owner's commands write it (`mkway lock open|close`, from their own terminal). A target is closed unless its lock is open
+and not expired. For one version a marker of the older place, `<bundle.root>/locks/<name>.json` of the work tree, is
+still read: closed wins. `mkway lock open` and `mkway go` remove it.
 """
 from __future__ import annotations
 
@@ -52,12 +55,49 @@ def built_in(root, profile, profile_file=None) -> list:
     ]
 
 
+STATE_PLACEHOLDER = "<state.dir>"  # in an engine default target's paths: the profile's own state folder (MW-018)
+
+
+def _default_raw() -> list:
+    """`locks.targets` of `defaults.json`: the engine's own targets (MW-018: `inbox`); [] when unreadable."""
+    try:
+        data = json.loads(profiles.DEFAULTS_FILE.read_text(encoding="utf-8"))
+        raw = data["locks"]["targets"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return []
+    return raw if isinstance(raw, list) else []
+
+
+def engine_targets(root, profile) -> list:
+    """The engine default targets, with `<state.dir>` taken at this profile's state folder. They cannot be removed by
+    the profile; a profile target of the same name is ignored."""
+    state = profiles.state_dir(root, profile)
+    state_rel = helpers.norm(str(state), root) or profiles.DEFAULT_STATE_DIR
+    taken = {t.name for t in built_in(root, profile)}
+    out = []
+    for t in _default_raw():
+        if not isinstance(t, dict) or not isinstance(t.get("name"), str) or t["name"] in taken:
+            continue
+        entries = []
+        for p in t.get("paths") or []:
+            if not isinstance(p, str):
+                continue
+            rel = helpers.norm(p.replace(STATE_PLACEHOLDER, state_rel), root)
+            if rel is not None:
+                entries.append(rel + ("/" if p.rstrip().endswith("/") else ""))
+        if entries:
+            out.append(Target(t["name"], entries, False, t.get("open_by_default") is True))
+    return out
+
+
 def profile_targets(root, profile) -> list:
-    """`locks.targets[]` entries inside the root; an entry outside it (a user home folder) is off (R4)."""
+    """`locks.targets[]` entries inside the root; an entry outside it (a user home folder) is off (R4). The engine's
+    own default targets come first (MW-018)."""
     raw = (profile.get("locks") or {}).get("targets") if isinstance(profile, dict) and isinstance(
         profile.get("locks"), dict) else None
-    out = []
-    taken = {t.name for t in built_in(root, profile)}
+    defaults = engine_targets(root, profile)
+    out = list(defaults)
+    taken = {t.name for t in built_in(root, profile)} | {t.name for t in defaults}
     for t in raw if isinstance(raw, list) else []:
         if not isinstance(t, dict) or not isinstance(t.get("name"), str) or t["name"] in taken:
             continue
@@ -77,8 +117,50 @@ def targets(root, profile, profile_file=None) -> list:
     return built_in(root, profile, profile_file) + profile_targets(root, profile)
 
 
+def lock_folder(root, profile) -> Path:
+    """The folder of the lock markers: the shared state folder's `locks/` (MW-022)."""
+    return profiles.shared_state_dir(root, profile) / "locks"
+
+
+def local_folder(root, profile) -> Path:
+    """The older, per-work-tree folder `<bundle.root>/locks/`: read for one version as a fallback (MW-022)."""
+    return Path(root) / profiles.bundle_root(profile) / "locks"
+
+
 def lock_file(root, profile, name: str) -> Path:
-    return Path(root) / profiles.bundle_root(profile) / "locks" / f"{name}.json"
+    return lock_folder(root, profile) / f"{name}.json"
+
+
+def local_file(root, profile, name: str) -> Path:
+    return local_folder(root, profile) / f"{name}.json"
+
+
+def _same(a: Path, b: Path) -> bool:
+    try:
+        return a.resolve() == b.resolve()
+    except OSError:
+        return a == b
+
+
+def _marker_files(root, profile, name: str) -> list:
+    """The marker paths of a target: the shared one, then the older local one when it is another file."""
+    shared, local = lock_file(root, profile, name), local_file(root, profile, name)
+    return [shared] if _same(shared, local) else [shared, local]
+
+
+def local_markers(root, profile) -> list:
+    """(name, path) of every marker file in the older per-work-tree folder (MW-022, `lock-marker-local`)."""
+    folder = local_folder(root, profile)
+    if _same(folder, lock_folder(root, profile)) or not folder.is_dir():
+        return []
+    return [(f.stem, f) for f in sorted(folder.glob("*.json"))]
+
+
+def marker_warnings(root, profile) -> list:
+    """One `lock-marker-local` line per older per-work-tree marker; the fix is the owner's `lock open` or `go`."""
+    return [f"lock-marker-local: {path} is an older per-work-tree marker of {name!r}; the gates still read it for one "
+            f"version (closed wins); the owner removes it with `mkway lock open {name}` or by deleting the file"
+            for name, path in local_markers(root, profile)]
 
 
 def _parse_time(text):
@@ -95,8 +177,22 @@ def default_open_names(root, profile) -> list:
 
 
 def hold_closed(root, profile, name: str) -> bool:
-    """True when the owner's marker of an open-by-default target exists."""
-    return lock_file(root, profile, name).exists()
+    """True when the owner's marker of an open-by-default target exists, in the shared folder or in the older local
+    one (MW-022: closed wins)."""
+    return any(p.exists() for p in _marker_files(root, profile, name))
+
+
+def _marker_state(path: Path, now) -> Optional[str]:
+    """`open` for an open, unexpired marker; `closed` for any other marker file; None for no file."""
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return "closed"
+    until = _parse_time(data.get("until")) if isinstance(data, dict) else None
+    ok = isinstance(data, dict) and data.get("state") == "open" and until is not None and until > now
+    return "open" if ok else "closed"
 
 
 def is_open(root, profile, name: str, now=None) -> bool:
@@ -104,13 +200,9 @@ def is_open(root, profile, name: str, now=None) -> bool:
         return False
     if name in default_open_names(root, profile):
         return not hold_closed(root, profile, name)  # the marker is the owner's close; no expiry
-    try:
-        data = json.loads(lock_file(root, profile, name).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return False
-    until = _parse_time(data.get("until")) if isinstance(data, dict) else None
     now = now or logs.now()
-    return isinstance(data, dict) and data.get("state") == "open" and until is not None and until > now
+    states = [_marker_state(p, now) for p in _marker_files(root, profile, name)]
+    return "closed" not in states and "open" in states  # MW-022: closed wins between the shared and the local marker
 
 
 def closed_target(root, profile, rel: Optional[str], profile_file=None) -> Optional[Target]:
@@ -255,18 +347,34 @@ def named_target(root, profile, text: str, profile_file=None):
 
 
 def open_locks(root, profile) -> list:
-    """(name, until) of every open, unexpired lock."""
-    folder = Path(root) / profiles.bundle_root(profile) / "locks"
+    """(name, until) of every open, unexpired lock, read from the shared folder and the older local one."""
+    names = set()
+    for folder in (lock_folder(root, profile), local_folder(root, profile)):
+        names |= {f.stem for f in folder.glob("*.json")} if folder.is_dir() else set()
     out = []
-    for f in sorted(folder.glob("*.json")) if folder.is_dir() else []:
-        if is_open(root, profile, f.stem):
-            data = json.loads(f.read_text(encoding="utf-8"))
-            out.append((f.stem, data.get("until")))
+    for name in sorted(names):
+        if name in default_open_names(root, profile) or not is_open(root, profile, name):
+            continue
+        until = None
+        for path in _marker_files(root, profile, name):
+            try:
+                until = json.loads(path.read_text(encoding="utf-8")).get("until")
+                break
+            except (OSError, ValueError, AttributeError):
+                continue
+        out.append((name, until))
     return out
 
 
 class LockError(Exception):
     pass
+
+
+def _drop_local(root, profile, name: str) -> None:
+    """The owner's word replaces an older per-work-tree marker of the target (MW-022)."""
+    shared, local = lock_file(root, profile, name), local_file(root, profile, name)
+    if not _same(shared, local):
+        local.unlink(missing_ok=True)
 
 
 def set_lock(root, profile, name: str, state: str, minutes: float = 60) -> dict:
@@ -281,6 +389,7 @@ def set_lock(root, profile, name: str, state: str, minutes: float = 60) -> dict:
         path = lock_file(root, profile, name)
         if state == "open":
             path.unlink(missing_ok=True)
+            _drop_local(root, profile, name)
             return {"name": name, "state": "open", "until": "no end: open by default"}
         path.parent.mkdir(parents=True, exist_ok=True)
         data = {"name": name, "state": "closed", "opened_at": now.isoformat(timespec="seconds"),
@@ -295,6 +404,7 @@ def set_lock(root, profile, name: str, state: str, minutes: float = 60) -> dict:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(json.dumps(data, indent=2) + "\n")
+    _drop_local(root, profile, name)
     return data
 
 

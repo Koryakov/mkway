@@ -49,7 +49,7 @@ def test_owner_only_command_runs_without_the_variable(tmp_path):
     root = task_root(tmp_path)
     code, out, err = cli(root, "lock", "open", "engine", env={})
     assert code == 0, (out, err)
-    assert (root / "mkway" / "locks" / "engine.json").is_file()
+    assert (root / "mkway" / "state" / "locks" / "engine.json").is_file()  # changed by MW-022 (E1): the shared folder
 
 
 def test_light_mode_card_moves_are_not_refused_by_the_cli(tmp_path):

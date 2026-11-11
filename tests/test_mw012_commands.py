@@ -42,12 +42,20 @@ def test_a_first_install_writes_a_watch_marker_for_each_form_gate_that_is_on(tmp
     marker beside a lock."""
     _src, task = _install(tmp_path / "on")
     folder = _state(task) / "gate_mode"
-    assert sorted(p.name for p in folder.iterdir()) == ["owner_ask.watch", "search.watch"]
-    assert {_marker(task, g)["cause"] for g in ("owner_ask", "search")} == {"installed"}
+    # changed by MW-017 (E8): the lead gate is a form gate too, so it starts in watch as well
+    # changed by MW-019 (E16): the outbox write gate `outbox_check.pre` is a form gate too
+    # changed by MW-018 (E12): the message gate is a form gate too
+    assert sorted(p.name for p in folder.iterdir()) == ["lead.watch", "message.watch", "outbox_check.pre.watch",
+                                                        "owner_ask.watch", "search.watch"]
+    assert {_marker(task, g)["cause"] for g in ("lead", "message", "outbox_check.pre", "owner_ask",
+                                                "search")} == {"installed"}
     rows = _rows(task, "gate-watch-installed")
-    assert sorted(r["gate"] for r in rows) == ["owner_ask", "search"] and all(r["time"] for r in rows)
+    assert sorted(r["gate"] for r in rows) == ["lead", "message", "outbox_check.pre", "owner_ask", "search"] and all(
+        r["time"] for r in rows)
     _src, off = _install(tmp_path / "off", gates={"search": {"on": False}})
-    assert sorted(p.name for p in (_state(off) / "gate_mode").iterdir()) == ["owner_ask.watch"]
+    assert sorted(p.name for p in (_state(off) / "gate_mode").iterdir()) == ["lead.watch", "message.watch",
+                                                                             "outbox_check.pre.watch",
+                                                                             "owner_ask.watch"]
 
 
 @pytest.mark.engine_repo
@@ -61,7 +69,7 @@ def test_a_re_install_keeps_the_modes(tmp_path):
     install.install(task, src, vcs="none")
     assert _marker(task, "search") is None
     assert _marker(task, "owner_ask") == before
-    assert len(_rows(task, "gate-watch-installed")) == 2
+    assert len(_rows(task, "gate-watch-installed")) == 5  # changed by MW-017 (E8), MW-019 and MW-018 (E12): lead, message, outbox_check.pre, owner_ask, search
 
 
 def test_gate_watch_writes_an_owner_marker(tmp_path):

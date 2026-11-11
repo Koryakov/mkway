@@ -81,7 +81,7 @@ def test_a_marker_refuses_the_edit_and_the_commit_until_the_owner_opens(held):
     command. Catches: a gate that reads no marker, a marker that expires, or a hold a session can lift."""
     code, _, _ = cli(held, "lock", "close", "hold", "--minutes", "5")
     assert code == 0
-    marker = held / "mkway" / "locks" / "hold.json"
+    marker = held / "mkway" / "state" / "locks" / "hold.json"  # changed by MW-022 (E1): the marker is in the shared folder
     assert marker.is_file()
     edit = _edit(held, "src/a.py")
     commit = _shell(held, "git commit -m 'CARD-001 x' -- src/a.py")
@@ -101,7 +101,7 @@ def test_hold_and_go_do_what_lock_close_and_open_do(held, tmp_path):
     then refuse and pass as for the long forms; a profile with no `hold` target gets a refusal that names the target
     and the profile line, and writes no marker. Catches: a short form that does something else, or one that fails
     silently on a profile without the target."""
-    marker = held / "mkway" / "locks" / "hold.json"
+    marker = held / "mkway" / "state" / "locks" / "hold.json"  # changed by MW-022 (E1): the marker is in the shared folder
     code, out, _ = cli(held, "hold")
     assert code == 0 and marker.is_file() and "hold" in out
     assert _reason(_edit(held, "src/a.py")) == "lock-closed-edit"
@@ -113,14 +113,14 @@ def test_hold_and_go_do_what_lock_close_and_open_do(held, tmp_path):
         code, out, err = cli(bare, word)
         text = out + err
         assert code != 0 and "no hold target" in text and "locks.targets" in text and "open_by_default" in text, text
-    assert not (bare / "mkway" / "locks" / "hold.json").exists()
+    assert not (bare / "mkway" / "state" / "locks" / "hold.json").exists()  # changed by MW-022 (E1)
 
 
 def test_hold_and_go_are_refused_inside_a_session(held):
     """E8 (part 3, R123): inside a session `mkway hold` and `mkway go` are owner-only, as the long forms are: the CLI
     refuses with `owner-only-command` and writes nothing, and the lock gate refuses the shell call. Catches: a short
     form a session can use to lift or set the hold."""
-    marker = held / "mkway" / "locks" / "hold.json"
+    marker = held / "mkway" / "state" / "locks" / "hold.json"  # changed by MW-022 (E1): the marker is in the shared folder
     for word in ("hold", "go"):
         code, out, err = cli(held, word, session=True)
         assert code != 0 and "owner-only-command" in err, (word, err)

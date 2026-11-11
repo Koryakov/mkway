@@ -154,6 +154,204 @@ stay.
   session parks the part that is blocked.
 The keys are `owner_ask.max_open`, `owner_ask.tool_allowed` and `notify.command` (`engine/KEYS.md`).
 
+## The lead role
+A lead is a session that orders work and does not do it. The engine knows it by its session id, the one the hook input
+carries, never by a name in a text. The gate `lead` (profile switch `gates.lead`) holds the role; it is a form gate
+(«Watch mode and trip»), so a first install starts it in watch, and the owner makes it block with `mkway gate on lead`.
+- **Register.** `mkway lead register`, run in a session, writes `{session_id, role: lead, since}` into `leads.json` in
+  the state folder (a second run changes nothing). The owner's terminal can make or end a lead: `mkway lead add
+  <id-prefix>` (a session id seen in the state records) and `mkway lead remove <id-prefix>`. Both are owner-only, like
+  `mkway give`. Refusals: `lead-no-session` (no hook check names the session: run it alone, in its plain form),
+  `lead-session-only` (register is a session's command), `lead-unknown` and `lead-ambiguous` (an id prefix that names
+  none or several), `lead-not-registered` (the session is no lead).
+- **What a lead may.** Make cards (`mkway card new`; the card's `Ordered by` is the lead, and its folder gets an
+  `ORDER.md` from the engine's template with the four headings `Objective`, `Output form`, `Time-box` and `Boundary`),
+  write that `ORDER.md` of the cards it ordered and the asks folder, close the cards it ordered (the rule of «Closing
+  cards» is unchanged), and receive notices. It hands a card it ordered to another lead with `mkway give <card>
+  <id-prefix>`; the card changes hands only when the new lead runs `mkway lead accept <card>`. The owner's `give` needs
+  no accept. Refusals: `lead-give-not-yours` (a card another orderer has), `lead-give-not-lead` (the target is no
+  lead), `lead-give-self`, `lead-accept-none` (no hand-off waits for this session), `lead-accept-stale` (the orderer
+  changed since the offer; the offer is dropped).
+- **What a lead may not.** Write any other path: `lead-no-edit` refuses it in the edit tools and in the shell (a
+  redirect, a copy, a delete, a program that may write anywhere; a path outside the repository is not judged). Hold a
+  card: `lead-no-take` refuses `mkway card take`. The owner's commands (locks, hold, `gate on|off`, `lead add|remove`,
+  consent) stay the owner's. A lead's message is never the owner's consent, and no gate reads a message.
+- **Notices.** The engine appends a row with the fields `id`, `from`, `to`, `kind`, `reply_to`, `ts`, `ack_ts`, `body` (the kind is
+  `notice`) to `inbox/<lead id>.jsonl` in the state folder, when a card of the lead is past its Appetite (the cell's amount from
+  its date, in whole days; once for each card), when a gate tripped into watch (every lead), when a default was taken on
+  an ask (the lead that ordered the asking session's card; every lead when that card is not established), and when a
+  builder finished (its `card set <id> waiting`; the card's orderer). A lead sees its unacked rows in its start block and
+  at each prompt (`lead-notices-unacked`) and clears one with `mkway ack <id>` (`ack-unknown` when there is none;
+  `ack-not-yours` for a row of another inbox; `lead-bad-id` when an inbox name is not a plain id; any session may ack its
+  own rows, see «Messaging order»). A notice unacked for `leads.escalate_hours` (default 4) shows in
+  `mkway leads` and in the start block of a session that is no lead, which is how it reaches the owner.
+- **The view.** `mkway leads` prints, for each lead: its id, the cards it ordered and has not closed, those past their
+  Appetite, its last activity, and its unacked and escalated notices, with each unacked row below. A lead with more cards
+  than `leads.max_cards` (default 5) gets a warning line; nothing is ever refused for the number.
+- **Shared state.** Sessions of several git work trees of one repository must see the same leads. `leads.json`,
+  `inbox/<lead id>.jsonl` and `sessions.jsonl` therefore live in the shared state folder: in a linked work tree it is
+  the main work tree's state folder (the same path below the top of the work tree, then `state.dir`); in the main work
+  tree, with no git, or when git fails it is the ordinary state folder. The answer is resolved once for each process.
+  Everything else (records, calls log, permits, once-store, lock markers) stays in each work tree's own state folder.
+  `sessions.jsonl` gets a row `{session_id, root, ts}` at each session start and a fresh one at a prompt when the
+  session's last row is ten minutes old; `mkway sessions` lists from it and prints the `root` folder of each session
+  (`root not established` for a session that only the records know).
+The keys are `leads.escalate_hours` and `leads.max_cards` (`engine/KEYS.md`).
+
+## Messaging order
+Sessions that message each other one by one, to anyone, with no record, give anarchy: the same body to two recipients, an
+order relayed and rewritten, statuses to the owner from several sessions. The order is **a star per card**, and every
+message is a row in an inbox. The owner reads one view, `mkway board`, so nobody sends the owner a status.
+- **Who may send to whom.** A lead is a registered lead («The lead role»). A builder is the session that holds a card a
+  lead ordered. A lead writes to another lead and to the builders of the cards it ordered; a builder writes to the lead
+  of its card only, never to another builder; a session with no role writes to a lead only. The engine reads the
+  holder of a card in the work tree the session runs in (the shared `sessions.jsonl` names it). Every other pair is
+  refused `message-topology`, and the text names the way. The same body to a second recipient inside
+  `messaging.duplicate_window_hours` is refused `message-duplicate` (the same body to one recipient is not).
+- **The kinds.** `order` (a lead's), `question`, `answer`, `notice` and `result`. An order and a question are commands and
+  need an ack; the receiver treats a row id it has seen as the same message. A `notice` and a `result` are events: they
+  go to a lead (the lead of the sender's card) and are never relayed on. The kind for finished work is `result`.
+- **The inbox.** One append-only file for each session, `inbox/<session id>.jsonl` in the shared state folder (the
+  file «The lead role» made for notices), keyed by session id, never by a name. A row has the fields `id`, `from`, `to`,
+  `kind`, `reply_to`, `ts`, `ack_ts`, `body`. The rows are written only by `mkway send` and `mkway ack`: the engine default
+  lock target `inbox` (in `defaults.json`, `locks.targets`: `<state.dir>/inbox/**` and `<state.dir>/pings.jsonl`) is
+  closed like every lock, so a row written by hand is refused by the lock gate.
+- **Send.** `mkway send --to <id-prefix> --kind <kind> --file <body> [--reply-to <id>]`. The sender is the session id of
+  the hook input (the lock gate's one-use permit), never a name in the text. The prefix is matched against
+  `sessions.jsonl`. The command appends the row and prints the ping line `mkway inbox <id>` and the recipient's `root`
+  folder. The sender finds the session in `ListAgents` by that folder and sends exactly that line, and nothing else, with
+  `SendMessage`; there is no socket poster (a session cannot post to another session's socket). A recipient never seen,
+  or last seen more than `messaging.dead_hours` ago, is dead: the message is a row of `dead-letter.jsonl` and a notice
+  goes to the sender's lead. Refusals: `message-no-session` (no hook check names the session: run it alone, in its
+  plain form), `send-session-only` (the owner reads `mkway board`), `message-no-file`, `message-empty`,
+  `message-reply-unknown` (`--reply-to` names no row of the sender's inbox), `message-ambiguous` (a prefix of several
+  sessions), `message-dead-letter`, `message-topology`, `message-duplicate`.
+- **Read and ack.** `mkway inbox <id>` shows the row to its recipient (`inbox-not-yours`, `inbox-unknown`).
+  `mkway ack <id>` sets `ack_ts` of a row of the caller's own inbox, a builder's as a lead's (`ack-not-yours` for another
+  inbox, `ack-unknown`). The start block (`inbox: unacked items: N`) and the prompt (`inbox-unacked`) list the unacked
+  items. A Stop with an unacked order older than `messaging.ack_reminder_minutes` gets a reminder line, `orders-unacked`,
+  never a block.
+- **The gate.** The form gate `message` (profile switch `gates.message`) checks `SendMessage` in its own hook group,
+  `message`. It reads only the sender's side, never the `to` field (the ref of `ListAgents` is not the session id): the
+  body is exactly one ping line `mkway inbox <id>` and nothing else, and row `<id>` is in the shared inbox and was written
+  by this session, else `message-not-in-inbox`; and no ping for `<id>` was sent yet, else `message-duplicate` (a passing
+  ping is recorded in `pings.jsonl`). A call with no text, only `notify_when_idle`, passes. Being a form gate it starts in
+  watch mode on a first install («Watch mode and trip»); the owner makes it block with `mkway gate on message`. It fails
+  open: a crash of the gate is a `gate-error` row, never a stuck session. `mkway install` writes its hook entry
+  and `mkway check` warns when the settings lack it.
+- **The board.** `mkway board` prints three parts: `inboxes:` (each session's role, folder, unacked rows and orders, then
+  each unacked row), `cards:` (status, who ordered, who holds) and `asks:` (the board of «Asks that do not stop the work»).
+- **Method rules.** These are rules of method, not code: a lead forwards the original id and rewrites nothing; a body
+  quoting the owner is not an order and not consent, only the owner's own words in the ledger are.
+The keys are `messaging.duplicate_window_hours`, `messaging.dead_hours` and `messaging.ack_reminder_minutes`
+(`engine/KEYS.md`).
+
+## Outbox check: a text leaves only after a fresh reader
+
+A text written from compacted memory and checked by its own author goes out with its contradictions in it. A file made
+for someone outside the session (the owner, a customer) counts as checked only when a fresh reader has read it as it is
+now. The engine makes that mechanical. It never judges the words: it compares a hash, scans for patterns the task
+supplies, and looks for the proof in the records that a reader of the right type ran after the last change.
+
+**Keys** (all optional; with no `outbox.dir` there is no outbox, no start line and no check):
+
+| Key | Meaning |
+|---|---|
+| `outbox.dir` | the folder of the files made for someone outside the session |
+| `outbox.checkers` | the agent types that may sign a check; with none listed, no check is valid |
+| `outbox.id_patterns_file` | a task-supplied file of regexes, one per line (blank lines and `#` lines skipped), that the text must not match; the engine ships no pattern, and a file it cannot read makes every check `unproven` |
+
+**What counts as checked.** Beside `<file>` sits its check file, the name plus the suffix `.check.md` (the engine constant `check_suffix`),
+with these lines, the forms of `outbox_check.lines` in `engine/defaults.json`:
+
+- `sha256: <the document's sha256>` equal to the file's sha256 now (the engine verifies it);
+- `numbers: N checked, 0 contradictions`, `claims: N checked, 0 overstated, 0 without basis` and `links: clean` (the
+  checker's attestations, form only);
+- `patterns: clean` (the engine scans the file with the regexes and a hit overrules the line);
+- `checker: <agent type>` with a type that is in `outbox.checkers`.
+
+**Proof of a fresh reader.** The agent records `agents.jsonl` must hold a start and an end of an agent of the `checker:`
+type in the session that wrote the check, with the start and the end after the file's last change and the end before the
+check was written. The session and the time of the write are the record the post step appends to
+`outbox_checks.jsonl` after every Write, Edit or MultiEdit of a check file; the session is the hook's session id, never a
+name in the text. A sub-agent has no memory of the session, so the reader is fresh by construction.
+
+**States** (`mkway outbox` prints one row per file: file, sha prefix, state, checker, time, and a problem line under
+each file that is not valid):
+
+| State | Meaning |
+|---|---|
+| `valid` | every line, an equal sha256, a listed checker, no pattern hit, the proof |
+| `stale` | the check holds a sha256 that is not the file's now: the text changed, or the check is for another file or an older version |
+| `unproven` | the sha256 is equal, but a line is missing or wrong, the checker is not listed, a pattern matches, or the proof is missing |
+| `missing` | no check file |
+
+**Where it bites** (mechanical places only, no words):
+
+- the write gate `outbox_check.pre` refuses `check-sha-mismatch`: a write that leaves a check file whose `sha256:` line is
+  missing or is not the document's now; the text gives the line to write, so a stale check cannot be forged by hand;
+- `card close` refuses `close-unchecked-outbox` while an Acceptance row names a file under `outbox.dir` whose check is not
+  `valid`, for the owner's close and for the orderer's (card MW-011);
+- the Stop gate adds a reminder `outbox-changed-after-check`, never a block, for a file whose text changed after its
+  check, once per session and set of files;
+- the post step records the write; when it cannot, it warns `check-record-failed` and the check reads `unproven`;
+- the start block has the line `outbox: N files, M unchecked`.
+
+**What stays refused or unproven**: a document edited after the check (`stale`); the sha line of an older version
+(`stale`); a check copied from another file (`stale`, or `unproven` when the text is the same, because no session wrote
+it with a write tool); a check made by a shell or changed after its write (`unproven`); a checker type that is not on the
+list, or no list; no agent row of that type in the session, or one that started before the last change or ended after
+the check; a pattern present while the line says clean; any line in the wrong form.
+
+**Class.** The write gate has class `form` (card MW-012): a first install starts it in watch mode, where a refusal is a
+`would-refuse` row and the write goes ahead, until the owner's `mkway gate on outbox_check.pre`. The record step and
+the Stop reminder never refuse and have class `integrity`.
+
+## Deliverables: built from tested code, compared with a named base
+
+A result file made for others is ready only when it exists at a named path, with its sha256, built on the final HEAD
+from code whose tests passed, past its gates and the fresh-reader check (the outbox check above). A status, a plan or a
+checklist is not a deliverable. A number that says «changed» or «now» names its base: a delivered file, never an
+internal run. The engine records and compares hashes and commits; it knows no task and judges no words.
+
+**Keys** (both optional; with no `deliverables.paths` there is no deliverable, no start line and no check):
+
+| Key | Meaning |
+|---|---|
+| `deliverables.paths` | globs of the result files made for others; may overlap `outbox.dir` |
+| `deliverables.require_base` | globs of the paths whose check file must name a delivered base |
+
+**`mkway built <path>`** (any session) records where a file came from. It refuses `built-dirty` while a tracked file has
+uncommitted changes (an untracked file, the result itself, does not count), `built-untested` while `commit_tests.jsonl`
+holds no green row for the tree of HEAD (the commit check of «Tests before a commit» writes that row: commit a change
+outside the test roots, or fix the red tests, then run the command again), and `built-no-file` for a path with no file.
+Otherwise it appends {path, sha256, head, tree, time, session} to `deliverables.jsonl` (the session is the hook's
+session id, `owner` in the owner's terminal) and a ledger row `built <path> <sha8> at <head8>`.
+
+**`mkway delivered <path>`** is the owner's command: it appends {path, sha256, time} to `delivered.jsonl` and keeps a
+copy at `<state>/delivered/<name>.<sha8>`, the base of every later comparison; an older copy is never overwritten. A
+session's call is refused `owner-only-command` by the command and by the lock gate, so no session picks its own base; a
+path with no file is `delivered-no-file`.
+
+**The base line.** The check file of the outbox check may hold one more line, `base: <sha8>` (the optional line of
+`outbox_check.lines`, read by the same parser). It must be the first eight digits of a delivered row, else the check is
+`unproven` and the problem names `base-unknown`; for the paths of `deliverables.require_base` the line is required.
+
+**Where it bites** (each a command check, strict like the close of the outbox check; no hook entry, so no watch mode):
+
+- `card close` refuses `close-deliverable-unbuilt` while an Acceptance row names a path of `deliverables.paths` and no
+  provenance row holds the file's current sha256 with a head that is HEAD or an ancestor of HEAD; the text names
+  `mkway built <path>`;
+- `card close` refuses `base-unknown` for a named path of `deliverables.require_base` whose check file (the name plus
+  `.check.md`) has no `base: <sha8>` line, or names a base no delivered row holds; the text names `mkway delivered`;
+- `mkway deliverables` lists each file: path, sha prefix, state (`built`; `changed`, a file that was changed after it
+  was built; `unbuilt`) and the sha prefix of its newest delivered row; the start block has the line
+  `deliverables: N built, M changed since built, K delivered`.
+
+**What stays refused**: a result built from a dirty tree or untested code; a file changed after it was built (its hash
+has no provenance row); a provenance copied from another history (its head is no ancestor of HEAD); a base that was
+never delivered, or an internal run named as the base; a session that delivers.
+
 ## Agent records
 Every helper agent's result is saved with its start and end time, so none is lost and none runs unseen.
 - The `post` group records `SubagentStart` and `SubagentStop` (gate `agents`, on by default; `gates.agents.on: false`
@@ -196,6 +394,8 @@ gated there). The gate takes the files each form of the commit would stage (`-- 
 5. **The message names the open card** (`commit-message-card`): the card's whole id, in the `ids.card_prefix` form, in
    a `-m`, a `-F -` here-document or a readable message file. On by default; `gates.commit_files.message_card.on` set
    to `false` turns this rule off and nothing else.
+6. **A rule card goes in with its test** (`rule-without-test`), when the profile sets `rules.cards` and
+   `rules.test_for`: see «Rule cards paired with tests» below.
 
 The gate fails closed (`commit-unreadable`): a commit it cannot read (a folder from a variable, a carried command, an
 unknown option or git form, a message it cannot read, a git read that fails or times out) is refused, and so is a
@@ -276,6 +476,7 @@ Profile line: `locks.targets: [{"name": "hold", "paths": ["**"], "open_by_defaul
 a built-in name with the flag is refused). Open until the owner runs, in their own terminal, `mkway hold` (a marker
 file); `mkway go` removes it; the long forms are `mkway lock close hold` and `mkway lock open hold`. Closed, it stops
 every session write and commit; it does not stop reading, answering, or a word in a message.
+The marker is in the shared state folder: a hold reaches every worktree of the repository.
 
 ## Deletes
 A session's delete is read by one gate before it runs: `delete`, one manifest entry (shell group, `onFailure: block`, so
@@ -324,6 +525,24 @@ Limits: SQL read from a file or stdin is not seen; an encoded command is not rea
 passes when the script is run by name); a quoted wildcard is read as a wildcard; the owner's own terminal runs no hook,
 so nothing is gated there; the backup is a copy in the working tree's state folder, so a disk loss takes both: a guard
 against slips, not a wall.
+
+## Rule cards paired with tests
+A rule card and its test travel together. Two profile keys switch the check on, both with no default, so it is off until
+a branch sets them: `rules.cards` (globs of the rule-card files) and `rules.test_for` (the path of a card's test, with
+`{id}` for the card id, e.g. `tests/rules/{id}/test_{id}.py`). The id of a card is read from its file name by the
+existing form `ids.rule_card`: the whole name without its extension, else the part before the first `-`, `_`, `.` or
+space. A file that matches a glob but holds no id in its name is not a rule card, and with no `ids.rule_card` nothing is
+refused.
+- **The commit check** is one more rule of the gate `commit_files` (class integrity, as the other commit checks): a
+  commit that adds or changes a rule card must take its test file too, new or changed, or it is refused
+  `rule-without-test`. A card whose test file does not exist is refused the same way. A test changed without its card, a
+  deleted card and a file outside the globs are allowed. The text names the card, the test path and the fix: write the
+  test (red first), stage it with `git add <test>` (with `-- <paths>`, name it after `--` as well), or leave the card out.
+  The tests then run before the commit, as always (the gate `commit_tests`).
+- **`mkway rules`** (a session may run it; it only reads): one line per card, with the card path, the test path,
+  `exists` or `missing`, and the last green tree: the newest `pass` row of `<state.dir>/commit_tests.jsonl` whose tree
+  holds the test file (8 characters, or `none`). With the keys unset it prints one line that names them.
+- **The start block** adds `rules: N cards, M without tests` when the keys are set.
 
 ## Known limits
 - A chain or pipe with an engine call is refused: run the mkway command alone, in its plain form (H4).
@@ -374,8 +593,8 @@ change. If the message does not show, the start block's line is the only route; 
 route to the owner). `card resync` accepts the changes and moves the baseline.
 
 ## Versioning
-The version is the `VERSION` file at the root (semantic versioning, `0.1.0`); the start block's first line shows it
-(`mkway v0.1.0 (<sha or ref>)`, read from the copy's own file) and `mkway install` writes it into `mkway.lock` as
+The version is the `VERSION` file at the root (semantic versioning, for example `0.2.0`); the start block's first line shows it
+(`mkway v0.2.0 (<sha or ref>)`, read from the copy's own file) and `mkway install` writes it into `mkway.lock` as
 `semver`, beside the pinned sha. `CHANGELOG.md` lists the cards of each release; a test keeps it in step with the
 register. Bump rule:
 - patch: a fix that changes no behaviour a user relies on;

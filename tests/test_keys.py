@@ -71,11 +71,16 @@ def test_keys_md_has_one_line_per_draft_key():
         "register.columns", "locks.targets", "paths.docs", "paths.exempt", "test_env", "questions.files",
         "owner_ask.dir", "owner_ask.markers", "owner_ask.sources",  # changed by MW-007 (E1, E3): the ask gate's keys
         "agents.cap_minutes",  # changed by MW-004 (E16): the agent cap of the start block
+        "rules.cards", "rules.test_for",  # changed by MW-021 (E3): the rule-card keys
+        "deliverables.paths", "deliverables.require_base",  # changed by MW-020 (E2): the deliverables keys
         "commit.junk", "commit.data_patterns", "commit.max_file_kb",  # changed by MW-006 (E3): the commit gate's keys
         "tests.command", "gates.commit_tests.budget_seconds",  # changed by MW-005 (E5): the commit gate's keys
         "delete.max_backup_mb", "delete.sql_allowed",  # changed by MW-009 (E3): the delete gate's keys
         "gates.trip.min_calls", "gates.trip.share",  # changed by MW-012 (E20): the trip keys; schema path `gates`
-        "owner_ask.max_open", "owner_ask.tool_allowed", "notify.command"}  # changed by MW-014 (E19): the asks that do not stop the work
+        "owner_ask.max_open", "owner_ask.tool_allowed", "notify.command",  # changed by MW-014 (E19): the asks that do not stop the work
+        "leads.escalate_hours", "leads.max_cards",  # changed by MW-017 (E20): the lead role's two keys
+        "messaging.duplicate_window_hours", "messaging.dead_hours",  # changed by MW-018 (E14): the messaging keys
+        "messaging.ack_reminder_minutes"}
     schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
     assert now_paths == _leaves(schema)
 

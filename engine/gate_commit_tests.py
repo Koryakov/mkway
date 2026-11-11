@@ -70,6 +70,65 @@ def _read(folder, *args, env=None, text=True):
     return proc.stdout
 
 
+def staged_key(listing: bytes) -> str:
+    """The `tree` key of a row: the sha256 of `git ls-files -s -z` as the gate reads the staged index (card MW-023)."""
+    return hashlib.sha256(listing).hexdigest()
+
+
+def _listing(root, rev):
+    """The bytes `git ls-files -s -z` prints for the index that equals commit `rev` (taken from `ls-tree -r -z`, which
+    holds the same entries in the same order), or None when git cannot tell."""
+    try:
+        proc = runner.git(root, "ls-tree", "-r", "-z", rev, text=False, timeout=GIT_SECONDS)
+    except (OSError, runner.TimeoutExpired, ValueError, runner.Refused):
+        return None
+    if proc.returncode != 0:
+        return None
+    out = []
+    for entry in proc.stdout.split(b"\0"):
+        if not entry:
+            continue
+        head, _tab, path = entry.partition(b"\t")
+        parts = head.split(b" ")
+        if len(parts) != 3:
+            return None
+        out.append(parts[0] + b" " + parts[2] + b" 0\t" + path + b"\0")
+    return b"".join(out)
+
+
+def tree_keys(root, rev="HEAD") -> list:
+    """The keys a row of `commit_tests.jsonl` may use for the tree of commit `rev`: its git tree id, then the digest
+    the gate writes (`staged_key`). The one definition every reader uses (card MW-023); `[]` when git cannot tell."""
+    try:
+        proc = runner.git(root, "rev-parse", f"{rev}^{{tree}}", timeout=GIT_SECONDS)
+    except (OSError, runner.TimeoutExpired, ValueError, runner.Refused):
+        return []
+    tree = proc.stdout.strip()
+    if proc.returncode != 0 or not tree:
+        return []
+    listing = _listing(root, rev)
+    return [tree] if listing is None else [tree, staged_key(listing)]
+
+
+def trees_of_keys(root, keys, limit=100) -> dict:
+    """{key: git tree id} for the keys that name a recent commit of HEAD (`limit` commits, newest first) in either form;
+    a key no commit names is left out. Stops once every key is found."""
+    wanted = {k for k in keys if isinstance(k, str) and k}
+    found = {}
+    try:
+        proc = runner.git(root, "rev-list", f"--max-count={limit}", "HEAD", timeout=GIT_SECONDS)
+    except (OSError, runner.TimeoutExpired, ValueError, runner.Refused):
+        return found
+    for commit in proc.stdout.split() if proc.returncode == 0 else []:
+        have = tree_keys(root, commit)
+        for key in have:
+            if key in wanted:
+                found.setdefault(key, have[0])
+        if wanted <= set(found):
+            break
+    return found
+
+
 def _chained(command: str, shell: str):
     """The name of an index-changing git command that comes before the commit in the same shell command, or None."""
     try:
@@ -148,7 +207,7 @@ def _gate(ctx, profile, commit):
         if profiles.docs_only(profile, rels):
             return gate.allow()
         argv = _argv(profile, roots)
-        tree = hashlib.sha256(_read(folder, "ls-files", "-s", "-z", env=env, text=False)).hexdigest()
+        tree = staged_key(_read(folder, "ls-files", "-s", "-z", env=env, text=False))
         cached = _cached(state, tree, " ".join(argv), limit)
         if cached is not None:
             return _verdict(cached, roots, limit)
