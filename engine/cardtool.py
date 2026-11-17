@@ -677,7 +677,9 @@ def record_inherited_red(root: Path, profile, card_id: str) -> str:
         "behind": found.behind})
     if not found.established:
         return (f"inherited red: {NE} (no usable test record of HEAD's history), so every red in the Paths of {card_id} "
-                f"counts as new red for this card; the next merge writes the row")
+                f"counts as new red for this card; after a refused commit, or any run that keeps a test row of "
+                f"HEAD, release the card and take it again (`mkway card release {card_id}` then `mkway card take "
+                f"{card_id}`): the new take records those reds")
     shown = "; ".join(found.red[:MAX_SHOWN]) + (f"; and {len(found.red) - MAX_SHOWN} more" if len(found.red) > MAX_SHOWN else "")
     return f"inherited red: {len(found.red)} recorded for {card_id}" + (f": {shown}" if found.red else "")
 

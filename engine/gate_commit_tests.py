@@ -1247,7 +1247,7 @@ def _refusal(judgement: Judgement, card_id, roots, errors=None, untracked=(), at
     ways = (f"{_untracked_note(untracked, errors)}Fix them and stage the fix, or commit the tests alone as the "
             f"red-first commit (every staged file under {', '.join(roots)}; that commit may be red).")
     if any(w in ("not-established", "none") for w in judgement.own_why.values()):
-        ways += f" {NOT_ESTABLISHED_WAY}"
+        ways += " " + NOT_ESTABLISHED_WAY.format(card=card_id or "<card id>")
     if existing:
         ways += (" For a test that exists at HEAD and was green there: put the changed test in the same commit as the "
                  "code change, where the run is green, or write the new expectation as a new test name in the red-first "
@@ -1279,8 +1279,9 @@ OWN_WHY = {  # MW-108, R283: the old reds in the Paths of the committing card th
     "none": "red at HEAD and still red in the Paths of {card}, but the take record of {card} holds no record of it, so "
             "it counts as new red",
 }
-NOT_ESTABLISHED_WAY = ("A red the take record does not hold: the next merge writes the row; until then every red counts "
-                       "as new for this card.")
+NOT_ESTABLISHED_WAY = ("A red the take record does not hold: release the card and take it again (`mkway card release "
+                       "{card}` then `mkway card take {card}`); this refusal just kept a test row of HEAD, the new take "
+                       "reads it and records those reds as the old red of the card.")
 
 
 def old_red_list(judgement: Judgement, card_id, order) -> list:

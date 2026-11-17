@@ -32,7 +32,8 @@ def inh(spec):
     taken, established, red, green, released = spec
     return cardtool.Inherited(taken, established, frozenset(red), frozenset(green), dict(released))
 
-WAY_OUT = "the next merge writes the row; until then every red counts as new for this card"
+WAY_OUT = "release the card and take it again (`mkway card release CARD-001` then `mkway card take CARD-001`)"
+OLD_WAY_OUT = "the next merge writes the row"
 
 
 @pytest.mark.parametrize("staged, head", [
@@ -164,6 +165,7 @@ def test_a_red_in_the_cards_paths_is_new_when_its_take_is_not_established():
     text = gct._refusal(got, "CARD-001", ["tests"])
     assert "take record of CARD-001 is not established" in text
     assert WAY_OUT in text
+    assert OLD_WAY_OUT not in text
 
 
 def test_a_red_in_the_cards_paths_that_was_recorded_green_at_take_is_new():
@@ -184,3 +186,4 @@ def test_a_red_in_the_cards_paths_that_the_take_record_does_not_hold_is_new():
     text = gct._refusal(got, "CARD-001", ["tests"])
     assert "holds no record of it" in text
     assert WAY_OUT in text
+    assert OLD_WAY_OUT not in text
