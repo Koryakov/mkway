@@ -18,8 +18,8 @@ def test_register_changelog_and_card_name_the_card():
     assert row, "no register row of MW-061 with the title of the card"
     assert row.group(1) == TITLE, "no register row of MW-061 with the title of the card"
     changelog = (REPO / "CHANGELOG.md").read_text(encoding="utf-8")
-    top = changelog.split("\n## ")[1]
-    assert f"- MW-061: {TITLE}" in top.splitlines(), "no changelog line of MW-061 under the top section"
+    holding = [sec.splitlines() for sec in changelog.split("\n## ")[1:] if f"- MW-061: {TITLE}" in sec.splitlines()]  # MW144-D2
+    assert len(holding) == 1 and holding[0][0].strip().count(".") == 2 and holding[0][0].strip().replace(".", "").isdigit()
     assert f"- MW-061: {TITLE}" in docs.changelog_section(changelog, "MW-061").splitlines()
     docs.assert_version_file()
     assert list((REPO / "cards").glob("MW-061-*/CARD.md"))

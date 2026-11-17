@@ -97,5 +97,6 @@ def test_register_changelog_and_card_name_the_card():
     title = "A builder in a git worktree copy can take and work its card"
     assert f"| MW-054 | {title} |" in register_text
     assert (REPO / "cards" / "MW-054-copy-works" / "CARD.md").is_file()
-    top = (REPO / "CHANGELOG.md").read_text(encoding="utf-8").split("\n## ")[1]
-    assert f"MW-054: {title}" in top
+    changelog = (REPO / "CHANGELOG.md").read_text(encoding="utf-8")
+    holding = [sec.splitlines() for sec in changelog.split("\n## ")[1:] if f"MW-054: {title}" in sec]  # MW144-D2
+    assert len(holding) == 1 and holding[0][0].strip().count(".") == 2 and holding[0][0].strip().replace(".", "").isdigit()

@@ -19,8 +19,10 @@ def test_register_changelog_and_card_name_the_card():
     row = re.search(r"^\| MW-101 \| (.+?) \| proposed \| `cards/MW-101-[a-z0-9-]+` \|$", register, re.M)
     assert row is not None, "no register row of MW-101"
     assert row.group(1) == TITLE
-    top = (REPO / "CHANGELOG.md").read_text(encoding="utf-8").split("\n## ")[1].rstrip().splitlines()
-    assert f"- MW-101: {TITLE}" in top  # MW-102 (R254) adds its line after this one
+    changelog = (REPO / "CHANGELOG.md").read_text(encoding="utf-8")
+    holding = [sec.splitlines() for sec in changelog.split("\n## ")[1:] if f"- MW-101: {TITLE}" in sec.splitlines()]  # MW144-D2
+    assert len(holding) == 1 and holding[0][0].strip().count(".") == 2 and holding[0][0].strip().replace(".", "").isdigit()
+    # MW-102 (R254) adds its line after this one
     docs.assert_version_file()
     assert list((REPO / "cards").glob("MW-101-*/CARD.md"))
 

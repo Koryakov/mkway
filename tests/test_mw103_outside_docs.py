@@ -40,7 +40,10 @@ def test_readme_register_and_changelog_name_the_card():
     section = readme.split("## The lead role", 1)[1].split("\n## ", 1)[0].strip()
     paragraphs = section.split("\n\n")
     register = (REPO / "cards" / "REGISTER.md").read_text(encoding="utf-8").splitlines()
-    top = (REPO / "CHANGELOG.md").read_text(encoding="utf-8").split("\n## ", 2)[1].splitlines()
+    changelog = (REPO / "CHANGELOG.md").read_text(encoding="utf-8")
+    holding = [sec.splitlines() for sec in changelog.split("\n## ")[1:] if any(x.startswith("- MW-103:") for x in sec.splitlines())]  # MW144-D2
+    assert len(holding) == 1 and holding[0][0].strip().count(".") == 2 and holding[0][0].strip().replace(".", "").isdigit()
+    top = holding[0]
     # R274-D1: the key moved to `paths`
     assert (any("paths.outside_writable" in p for p in paragraphs), any(r.startswith("| MW-103 |") for r in register),
             any(t.startswith("- MW-103:") for t in top)) == (True, True, True)

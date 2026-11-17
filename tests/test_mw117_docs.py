@@ -20,7 +20,8 @@ def test_register_changelog_and_card_name_the_card():
     row = re.search(r"^\| MW-117 \| (.+?) \| proposed \| `cards/MW-117-[a-z0-9-]+` \|$", register, re.M)
     assert row is not None and row.group(1) == TITLE
     changelog = (REPO / "CHANGELOG.md").read_text(encoding="utf-8")
-    assert f"- MW-117: {TITLE}" in changelog.split("\n## ")[1].splitlines()
+    holding = [sec.splitlines() for sec in changelog.split("\n## ")[1:] if f"- MW-117: {TITLE}" in sec.splitlines()]  # MW144-D2
+    assert len(holding) == 1 and holding[0][0].strip().count(".") == 2 and holding[0][0].strip().replace(".", "").isdigit()
     assert list((REPO / "cards").glob("MW-117-*/CARD.md"))
 
 

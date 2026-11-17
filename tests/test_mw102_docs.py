@@ -20,8 +20,10 @@ def test_register_changelog_and_card_name_the_card():
     row = re.search(r"^\| MW-102 \| (.+?) \| proposed \| `cards/MW-102-[a-z0-9-]+` \|$", register, re.M)
     assert row is not None, "no register row of MW-102"
     assert row.group(1) == TITLE
-    top = (REPO / "CHANGELOG.md").read_text(encoding="utf-8").split("\n## ")[1].rstrip().splitlines()
-    assert f"- MW-102: {TITLE}" in top  # changed by R256: the line is in the top section, not pinned as its last line
+    changelog = (REPO / "CHANGELOG.md").read_text(encoding="utf-8")
+    holding = [sec.splitlines() for sec in changelog.split("\n## ")[1:] if f"- MW-102: {TITLE}" in sec.splitlines()]  # MW144-D2
+    assert len(holding) == 1 and holding[0][0].strip().count(".") == 2 and holding[0][0].strip().replace(".", "").isdigit()
+    # changed by R256: the line is not pinned as the last line of its section
     docs.assert_version_file()
     assert list((REPO / "cards").glob("MW-102-*/CARD.md"))
 

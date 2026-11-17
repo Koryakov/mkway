@@ -3,6 +3,16 @@
 Each release lists its cards, one line each, with the id and the title of the register (`cards/REGISTER.md`). A test
 keeps this file and the register in step.
 
+## 0.4.0
+- MW-140: A file outside the task root is outside: git's names are read against the git top
+- MW-139: the refusal for a red the take record does not hold names the route that works: release the card, take it again
+- MW-135: the commit gate's refusal of a red test that exists at HEAD and was green there says so and names the two ways out, not the red-first commit
+- MW-137: the lead that ordered an open card re-records its Paths: mkway card paths --add and --remove, the same checks as the first open, never the holder
+- MW-136: the refusal text of card-paths-changed names the routes that work today: restore the recorded Paths, or a new card opened by its orderer
+- MW-134: a recorded red id is retired by a valid case_map line of its card, in a tests-only commit, under a decision of the ledger that another session wrote
+- MW-141: a test's row ages are measured when the test runs, not when its module is imported
+- MW-144: release 0.4.0: raise VERSION, list the cards merged after 0.3.0
+
 ## 0.3.0
 - MW-033: The commit message names the card anywhere in the first line
 - MW-034: The commit check reads what the commit takes; one builder per root
@@ -89,13 +99,6 @@ keeps this file and the register in step.
 - MW-131: the commit gate finds a card's own red record in the whole history of HEAD, however many unrelated commits followed the red commit
 - MW-132: a builder holding an open card never ends a turn silently: at its first stop the engine writes its last message into the orderer's inbox and blocks once, asking only for the ping line
 - MW-133: release 0.3.0: clean card paths, raise VERSION
-- MW-140: A file outside the task root is outside: git's names are read against the git top
-- MW-139: the refusal for a red the take record does not hold names the route that works: release the card, take it again
-- MW-135: the commit gate's refusal of a red test that exists at HEAD and was green there says so and names the two ways out, not the red-first commit
-- MW-137: the lead that ordered an open card re-records its Paths: mkway card paths --add and --remove, the same checks as the first open, never the holder
-- MW-136: the refusal text of card-paths-changed names the routes that work today: restore the recorded Paths, or a new card opened by its orderer
-- MW-134: a recorded red id is retired by a valid case_map line of its card, in a tests-only commit, under a decision of the ledger that another session wrote
-- MW-141: a test's row ages are measured when the test runs, not when its module is imported
 
 ## 0.2.7
 - MW-027: Install: one step to a committed fence

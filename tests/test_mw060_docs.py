@@ -1,5 +1,7 @@
 """Card MW-060: the README, the register and the changelog state the rule «commit_tests tests the tree git will commit».
 Synthetic text only."""
+import re
+
 import pytest
 
 from _engine import REPO
@@ -26,5 +28,6 @@ def test_register_changelog_and_card_name_the_card():
     assert (REPO / "cards" / "MW-060-taken-tree" / "CARD.md").is_file()
     changelog = (REPO / "CHANGELOG.md").read_text(encoding="utf-8")
     top = changelog.split("\n## ")[1]
-    assert f"MW-060: {TITLE}" in top
+    holding = [sec for sec in changelog.split("\n## ")[1:] if f"MW-060: {TITLE}" in sec]  # MW144-D1
+    assert len(holding) == 1 and re.fullmatch(r"\d+\.\d+\.\d+", holding[0].split("\n")[0].strip())
     assert top.split("\n")[0].strip() == (REPO / "VERSION").read_text(encoding="utf-8").strip()

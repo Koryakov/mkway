@@ -49,5 +49,5 @@ def test_register_changelog_and_card_name_the_card():
     assert f"| MW-056 | {TITLE} |" in register
     assert (REPO / "cards" / "MW-056-new-red-only" / "CARD.md").is_file()
     changelog = (REPO / "CHANGELOG.md").read_text(encoding="utf-8")
-    top = changelog.split("\n## ")[1]
-    assert f"MW-056: {TITLE}" in top
+    holding = [sec.splitlines() for sec in changelog.split("\n## ")[1:] if f"MW-056: {TITLE}" in sec]  # MW144-D2
+    assert len(holding) == 1 and holding[0][0].strip().count(".") == 2 and holding[0][0].strip().replace(".", "").isdigit()
