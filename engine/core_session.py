@@ -199,11 +199,13 @@ def _card_rules(facts: SubtaskFacts, rel: str) -> Optional[Verdict]:
                                             f"`card open` recorded ({'; '.join(sorted(recorded)) or 'none'}); "
                                             f"restore them to the recorded set, or put the extra files under a new card: "
                                             f"the lead that orders it opens it (`{cli} card open <new id>`); a "
-                                            f"re-open of an open card records nothing")
+                                            f"re-open of an open card records nothing; or the lead that ordered the card "
+                                            f"re-records them: `{cli} card paths {card_id} --add <entry>`")
     if recorded and not any(helpers.matches(rel, e) for e in recorded):
         return refuse("file-not-in-card", _noted(f"{rel} is not in the Paths of {card_id} "
-                                                 f"({'; '.join(sorted(recorded))}); add it to the card and ask the "
-                                                 f"owner to `card open {card_id}` again, or write a new card", notes, rel))
+                                                 f"({'; '.join(sorted(recorded))}); the lead that ordered the card adds "
+                                                 f"it to its Paths: `{cli} card paths {card_id} --add <entry>` (the card "
+                                                 f"file's Paths must already name it), or write a new card", notes, rel))
     return None
 
 

@@ -388,8 +388,9 @@ def _commit(facts: Facts, commit: CommitFacts):
         shown = "; ".join(sorted(recorded))
         return refuse("file-not-in-card", _noted(f"{_list(outside)} {'is' if len(set(outside)) == 1 else 'are'} not in "
                                                  f"the Paths of {card_id} ({shown}); {way}, or "
-                                                 f"add them to the card and ask the owner to `card open {card_id}` "
-                                                 f"again, or write a new card{rule}", commit, outside))
+                                                 f"the lead that ordered the card adds them to its Paths: `{facts.cli} "
+                                                 f"card paths {card_id} --add <entry>` (the card file's Paths must "
+                                                 f"already name them), or write a new card{rule}", commit, outside))
     verdict = _content(facts, commit, taken)
     if verdict is not None:
         return verdict

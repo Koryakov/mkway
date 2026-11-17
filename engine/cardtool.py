@@ -181,14 +181,28 @@ def _too_wide(entry: str, roots: list) -> bool:
     return base in roots
 
 
+def paths_entries(cell: str) -> list:
+    """The entries of a Paths cell, or of the values a `card paths` call names, as written (blank ones left out)."""
+    return [x for x in re.split(r"[,;]", cell or "") if x.strip().strip("`").strip()]
+
+
+def wide_entries(raw: list, profile) -> list:
+    """The entries of `raw` (as written) that are too wide: the one check of the first open and of a re-record (MW-137)."""
+    roots = test_roots(profile)
+    return [x.strip() for x in raw if _too_wide(norm_entry(x), roots)]
+
+
+def wide_error(card_id: str, wide: list) -> "CardError":
+    return CardError(f"{card_id}: Paths entry {', '.join(wide)} names the whole repository or a test root; name "
+                     f"the files and folders the card edits", reason="card-paths-too-wide")
+
+
 def recorded_paths(root: Path, profile, card_id: str) -> str:
     """The card's Paths as the register records them at `card open`; `card-paths-too-wide` refuses."""
-    raw = [x for x in re.split(r"[,;]", card_paths(root, profile, card_id)) if x.strip().strip("`").strip()]
-    roots = test_roots(profile)
-    wide = [x.strip() for x in raw if _too_wide(norm_entry(x), roots)]
+    raw = paths_entries(card_paths(root, profile, card_id))
+    wide = wide_entries(raw, profile)
     if wide:
-        raise CardError(f"{card_id}: Paths entry {', '.join(wide)} names the whole repository or a test root; name "
-                        f"the files and folders the card edits", reason="card-paths-too-wide")
+        raise wide_error(card_id, wide)
     return "; ".join(dict.fromkeys(norm_entry(x) for x in raw))
 
 
@@ -779,6 +793,177 @@ def open_problem(row: dict, session, is_lead: bool):
     if row.get("status") != "proposed":
         return ("card-bad-move", f"{card_id} is {row.get('status')}; a lead opens only a proposed card it ordered")
     return None
+
+
+# --- the lead re-records the Paths of an open card it ordered (card MW-137; rulings R352 A, R353) --------------------------
+# Paths are recorded once, at the first open from `proposed` (H1, R54). When a decision legitimately widens (or narrows) a
+# card, the lead role that ordered it re-records them with `card paths <id> --add ... --remove ...`. The lead's intent is in
+# the CALL; the card file is written by the holder after the open, so it is never the source: the engine records only when
+# the file's Paths equal the recorded set plus and minus the named entries (R353 h). The checks of the first open run here
+# through the same code (`wide_entries`, `recorded_paths`). The owner's terminal may run it too.
+
+PATHS_FILE = "paths_changes.jsonl"  # `<state.dir>/`: one row per re-record: time, card, old set, new set, who
+
+
+def _show(items) -> str:
+    return "; ".join(sorted(items)) or "none"
+
+
+def paths_state_problem(row: dict):
+    """None when the card of `row` is in a state a re-record fits: `open`, or `waiting` (the holder's own pause). Else
+    (`paths-card-state`, text that names the move that fits): `proposed`, `closed`, `waiting-owner` (the owner's pause)."""
+    card_id, status = row.get("id", ""), row.get("status", "")
+    if status in ("open", "waiting"):
+        return None
+    if status == "proposed":
+        return ("paths-card-state", f"{card_id} is proposed: its Paths are recorded when it is opened, so there is nothing "
+                                    f"to re-record yet. Open it with `mkway card open {card_id}` (the lead that ordered it "
+                                    f"runs it; otherwise the owner, in their own terminal), then repeat this call if the "
+                                    f"card file's Paths still differ")
+    if status == "waiting-owner":
+        return ("paths-card-state", f"{card_id} is paused by the owner (waiting-owner): the owner lifts the pause with "
+                                    f"`mkway card open {card_id}` in their own terminal, then the lead repeats this call")
+    return ("paths-card-state", f"{card_id} is {status}: the owner re-opens it with `mkway card open {card_id}` in their own "
+                                f"terminal (a re-open keeps the recorded Paths), then the lead repeats this call")
+
+
+def paths_problem(row: dict, session, is_lead: bool, holder):
+    """None when `session` may re-record the Paths of the card of `row`, else (reason id, text that names the way out).
+    The same rule as the lead's open and close (R356): the caller is a registered lead AND the card's `Ordered by` is the
+    caller's own session id; a card another session ordered is refused, also when that session is or was a lead. In this
+    order: `paths-not-lead` (no registered lead now), `paths-by-holder` (the holder never changes the Paths of its own card,
+    also when it is a lead), `paths-not-orderer` (the card was ordered by the owner, or by another session), then the state
+    (`paths_state_problem`). A planned change of lead is the existing hand-off: `give` and `lead accept` set `Ordered by` to
+    the new lead. `holder`: the card's holder, or None."""
+    card_id = row.get("id", "")
+    ordered = row.get(register.ORDERED) or register.OWNER
+    if not isinstance(session, str) or not session.strip() or not is_lead:
+        return ("paths-not-lead", f"{card_id}: `mkway card paths` is the lead's command: only a registered lead that "
+                                  f"ordered the card re-records its Paths, and this session is none. The lead that ordered "
+                                  f"it runs it (send it the entry with `mkway send`), or the owner runs it in their own "
+                                  f"terminal")
+    if holder == session:
+        return ("paths-by-holder", f"{card_id} is held by this session: a holder never changes the Paths of its own card, "
+                                   f"also when it is a lead. The lead that ordered it ({ordered}) runs `mkway card paths "
+                                   f"{card_id} --add <entry>` (a lead that also holds it first hands the card to another "
+                                   f"lead: `mkway give {card_id} <id prefix>`, then that lead runs `mkway lead accept "
+                                   f"{card_id}`), or the owner runs it in their own terminal")
+    if ordered == register.OWNER:
+        return ("paths-not-orderer", f"{card_id} was ordered by the owner, not by a lead: its Paths stay the owner's. The "
+                                     f"owner changes the Paths cell of its row in the register and runs `python "
+                                     f"mkway/engine/mkway.py card resync` in their own terminal")
+    if ordered != session:
+        return ("paths-not-orderer", f"{card_id} was ordered by {ordered}, not by this session: only the session that ordered "
+                                     f"a card re-records its Paths, also when another session is or was a lead. Hand the "
+                                     f"order over: {ordered} runs `mkway give {card_id} <your id prefix>` and this session "
+                                     f"runs `mkway lead accept {card_id}`; or the owner runs `mkway give {card_id} <id "
+                                     f"prefix>` (it needs no accept) in their own terminal")
+    return paths_state_problem(row)
+
+
+def paths_problem_for(root: Path, profile, row: dict, session):
+    """`paths_problem` with its facts read: the leads file and the records (the lock gate and the command both come here)."""
+    import leads  # leads imports this module
+    state, shared = profiles.state_dir(Path(root), profile), profiles.shared_state_dir(Path(root), profile)
+    holder = records.holders(state, register.closed_ids(root, profile)).get(row.get("id", ""))
+    return paths_problem(row, session, leads.is_lead(shared, session), holder)
+
+
+class PathsChange(NamedTuple):
+    """What a re-record did: the card, the old and the new set (sorted), who, the holder at that moment, the notice row
+    written to it (None: no holder, or it could not be written, see `note`) and a line for what could not be written."""
+    card: str
+    old: tuple
+    new: tuple
+    by: str
+    holder: Optional[str]
+    notice: Optional[dict]
+    note: str
+
+
+def rerecord_paths(root: Path, profile, card_id: str, add: list, remove: list, caller=None) -> PathsChange:
+    """`card paths <card> --add ... --remove ...`: record the card's Paths as the recorded set plus `add` minus `remove`.
+    `caller`: the session id of the lock gate's one-use permit; None for the owner's terminal. Refusals: `card-unknown`,
+    `paths-not-lead`, `paths-not-orderer`, `paths-by-holder`, `paths-card-state` (the owner's terminal meets only the
+    last), `card-paths-too-wide` (an entry of `add`, or the file's, or an empty result: the first open's own check),
+    `paths-file-differs` (the card file's Paths are not the recorded set plus and minus the named entries: nothing is
+    recorded), `paths-record-failed`, `card-bad-move` (the card changed while it was being re-recorded). One row in
+    PATHS_FILE and one `notice` to the holder, when there is one."""
+    import leads  # leads imports this module
+    import messages  # messages imports this module
+    state, shared = profiles.state_dir(Path(root), profile), profiles.shared_state_dir(Path(root), profile)
+    row = register.find(register.read(root, profile), card_id)
+    if row is None:
+        raise CardError(f"{card_id} is not in the register", reason="card-unknown")
+    ordered = row.get(register.ORDERED) or register.OWNER
+    holder = records.holders(state, register.closed_ids(root, profile)).get(card_id)
+    who = caller or register.OWNER
+    problem = paths_problem_for(root, profile, row, caller) if caller else paths_state_problem(row)
+    if problem:
+        raise CardError(problem[1], reason=problem[0])
+    add_raw, remove_raw = paths_entries(", ".join(add)), paths_entries(", ".join(remove))
+    wide = wide_entries(add_raw, profile)
+    if wide:
+        raise wide_error(card_id, wide)
+    add_set, remove_set = {norm_entry(x) for x in add_raw}, {e for e in (norm_entry(x) for x in remove_raw) if e}
+    if add_set & remove_set:
+        raise CardError(f"{card_id}: {_show(add_set & remove_set)} is named by both --add and --remove; name each entry once")
+    recorded = paths_set(row.get("paths", ""))
+    expected = (recorded | add_set) - remove_set
+    try:
+        in_file = paths_set(card_paths(root, profile, card_id))
+    except OSError as exc:
+        raise CardError(f"{card_id}: the card file cannot be read ({exc.__class__.__name__}), so its Paths cannot be "
+                        f"compared; nothing was recorded") from None
+
+    def differs(found):
+        return CardError(f"{card_id}: the Paths in the card file are not the recorded set plus and minus the entries this "
+                         f"call names, so nothing was recorded. Recorded: {_show(recorded)}. This call: add "
+                         f"{_show(add_set)}, remove {_show(remove_set)}. Expected in the file: {_show(expected)}. In the "
+                         f"file and not expected: {_show(found - expected)}; expected and not in the file: "
+                         f"{_show(expected - found)}. The holder or the owner puts the Paths cell of the card file right "
+                         f"(the lead cannot write the file after the open), then the lead repeats the same call",
+                         reason="paths-file-differs")
+
+    if in_file != expected:
+        raise differs(in_file)
+    if expected == recorded:
+        return PathsChange(card_id, tuple(sorted(recorded)), tuple(sorted(recorded)), who, holder, None, "")
+    if not expected:
+        raise CardError(f"{card_id}: removing every entry leaves an empty Paths, which is no file rule and names the whole "
+                        f"repository; name the files and folders the card edits", reason="card-paths-too-wide")
+    new = recorded_paths(root, profile, card_id)  # the first open's own check and form, on the file just compared
+    if paths_set(new) != expected:
+        raise differs(paths_set(new))
+    entry = {"time": logs.now().isoformat(timespec="milliseconds"), "card": card_id, "old": sorted(recorded),
+             "new": sorted(expected), "by": who}
+
+    def mutate(rows):
+        r = register.find(rows, card_id)
+        if (r is None or r.get("status") != row.get("status") or paths_set(r.get("paths", "")) != recorded
+                or (r.get(register.ORDERED) or register.OWNER) != ordered):
+            raise CardError(f"{card_id} changed while its Paths were being re-recorded; run it again", reason="card-bad-move")
+        try:  # the record is written before the register changes
+            logs.append_jsonl(Path(state) / PATHS_FILE, entry)
+        except OSError as exc:
+            raise CardError(f"{card_id}: the record of this re-record could not be written to {Path(state) / PATHS_FILE} "
+                            f"({exc.__class__.__name__}), so nothing was recorded. Make the state folder writable (free "
+                            f"space, rights, no folder in place of that file), then repeat the call",
+                            reason="paths-record-failed") from None
+        r["paths"] = new
+        return rows
+    register.write(root, profile, mutate)
+    notice, note = None, ""
+    if holder:
+        body = (f"{card_id}: the Paths of the card were re-recorded by {who}. Added: {_show(expected - recorded)}. "
+                f"Removed: {_show(recorded - expected)}. Recorded now: {_show(expected)}. Your edits of the added files "
+                f"pass the card rules from now on; a removed file is no longer in the card")
+        try:
+            notice = messages.send_paths_notice(shared, who, holder, body, card_id)
+        except (OSError, leads.LeadError, messages.MessageError) as exc:
+            note = (f"the notice to the holder {holder} could not be written ({exc.__class__.__name__}); the Paths are "
+                    f"recorded: tell the holder yourself")
+    return PathsChange(card_id, tuple(sorted(recorded)), tuple(sorted(expected)), who, holder, notice, note)
 
 
 def move(root: Path, profile, card_id: str, target: str, *, session: bool, record_paths: bool,

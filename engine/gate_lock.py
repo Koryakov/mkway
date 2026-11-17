@@ -408,6 +408,11 @@ class Reader:
                 open_problem=cardtool.open_problem(row, session, lead)))
         return core_lock.RegisterFacts(rows=rows)
 
+    def fact_paths_problem(self, card_id):
+        """MW-137: the card tool's answer for this session about re-recording the Paths of `card_id` (None: it may)."""
+        row = register.find(register.read(self.ctx.root, self.profile), card_id)
+        return cardtool.paths_problem_for(self.ctx.root, self.profile, row, self.ctx.session_id) if row else None
+
     def fact_quote_rel(self, value):
         return self.ctx.norm(value) if self.ctx.norm else None
 

@@ -59,7 +59,7 @@ class Verdict:
 
 @dataclass(frozen=True)
 class Permit:
-    """A one-use permit the shell leaves: kind `by` (names the session), `close`, `open` or `release` (name a card).
+    """A one-use permit the shell leaves: kind `by` (names the session), `close`, `open`, `release` or `paths` (MW-137; name a card).
     `on_fail` is the verdict when the permit cannot be written. `scope` (MW-110, R279c): `messaging` for the by-permit of
     `send`, `inbox` and `ack`, which the shell writes under the session's own id; empty for every other permit."""
     kind: str
@@ -520,6 +520,25 @@ def _open_by_lead(f: Facts, card_id, permits: list) -> Optional[Verdict]:
     return None
 
 
+def _paths_by_lead(f: Facts, card_id, permits: list) -> Optional[Verdict]:
+    """MW-137 (R352 A), `cards.approver: orderer` only: a session's `card paths <id>` leaves the one-use permit of kind `paths`
+    the command reads its session id from, when the card tool has no problem for this session (`paths_problem`: not a lead, not
+    the lead that ordered the card, the holder, the card's state); under any other approver the command is the owner's. An
+    unknown card is left to the command (`card-unknown`)."""
+    if not f.orderer:
+        return _owner_only("card paths")
+    if not card_id or _register(f).rows.get(card_id) is None:
+        return None
+    problem = _read(f, "paths_problem", card_id)
+    if problem:
+        return refuse(*problem)
+    permits.append(Permit("paths", card_id, refuse("paths-no-permit", f"{card_id}: the permit of this call could not be "
+                                                                    f"written; run `mkway card paths {card_id}` alone, in its "
+                                                                    f"plain form, in a session with the engine hooks, or the "
+                                                                    f"owner runs it in their own terminal")))
+    return None
+
+
 def _release_by_orderer(f: Facts, card_id, permits: list) -> Verdict:
     """MW-045: a session's `card release` of a card another session holds passes only for the session that ordered
     the card; the gate leaves the one-use permit the CLI reads. Anyone else is `card-not-yours`."""
@@ -587,6 +606,8 @@ def _call(f: Facts, args, permits: list) -> Optional[Verdict]:
     if sub == "release-red":  # MW-108 (R283 4): the orderer's; the CLI reads the caller from this by-permit and decides
         permits.append(Permit("by"))
         return None
+    if sub == "paths":  # MW-137 (R352 A): the lead's re-record of the Paths of an open card it ordered
+        return _paths_by_lead(f, card_id, permits)
     held = _read(f, "holders")
     if sub == "release":
         if any(a == "--force" or a.startswith("--force=") for a in args):

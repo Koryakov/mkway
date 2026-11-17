@@ -49,6 +49,26 @@ def old_red_lines(rows) -> list:
     return out
 
 
+def paths_lines(rows, open_ids) -> list:
+    """MW-137: one line for each card in `open_ids` whose Paths were re-recorded (rows of `paths_changes.jsonl`: card, old, new,
+    by, time): how many times, and the last change with who made it and when. A row with no card or no lists is left out."""
+    per: dict = {}
+    for row in rows or []:
+        if isinstance(row, dict) and isinstance(row.get("card"), str) and isinstance(row.get("old"), list) \
+                and isinstance(row.get("new"), list):
+            per.setdefault(row["card"], []).append(row)
+    out = []
+    for card, items in per.items():
+        if card not in open_ids:
+            continue
+        last = items[-1]
+        added = sorted(set(map(str, last["new"])) - set(map(str, last["old"])))
+        removed = sorted(set(map(str, last["old"])) - set(map(str, last["new"])))
+        out.append(f"paths of {card} re-recorded {len(items)} time{'s' if len(items) != 1 else ''}; last by {last.get('by')} at "
+                   f"{str(last.get('time'))[:16]}: added {'; '.join(added) or 'none'}, removed {'; '.join(removed) or 'none'}")
+    return out
+
+
 def age_text(ts, now) -> str:
     """The time since `ts` as a reader scans it: `under 1 min`, `7 min`, `2 h 5 min`, `3 d 4 h`."""
     when = _when(ts)
@@ -184,6 +204,11 @@ def lines(root, profile, now=None) -> list:
         rows = leads.all_rows(shared)
         out += no_done_lines([(r["id"], held[r["id"]], records.hold_time(state, r["id"], held[r["id"]]))
                               for r in open_rows], rows)
+    except Exception:
+        pass
+    try:  # MW-137: the owner sees a re-record of a card's Paths here; nobody pings the owner
+        live = {r["id"] for r in register.read(root, profile) if r.get("status") != "closed"}
+        out += paths_lines(scorecard.read_rows(Path(state) / cardtool.PATHS_FILE), live)
     except Exception:
         pass
     out += failed_agent_lines(state)

@@ -521,6 +521,29 @@ def send_handoff(root, profile, shared, session, to, body, card, now=None) -> Se
     return Sent(row, target, target_root)
 
 
+PATHS_EVENT = "paths-notice"  # MW-137: the record row of the inbox notice a re-record of a card's Paths writes to its holder
+
+
+def record_paths_notice(shared, row: dict, session: str, card: str, now=None) -> None:
+    """MW-137: the message record of the paths notice: event `paths-notice`, so `sends_by` and `sends_to` never count it."""
+    logs.append_jsonl(Path(shared) / RECORD, {
+        "event": PATHS_EVENT, "id": row["id"], "session": session, "to": row["to"], "card": card,
+        "ts": _now(now).isoformat(timespec="milliseconds")})
+
+
+def send_paths_notice(shared, sender, to, body, card, now=None) -> dict:
+    """MW-137 (R352 A d): the one `notice` row from the lead (`owner` from the owner's terminal) to the holder of a card whose
+    Paths were re-recorded. The engine's own write, as the handoff notice and the refusal record are: the star topology of
+    `send` is not asked, and the holder needs no live session in the sessions file. The record is written first; the row is
+    returned. Raises `LeadError` for an id that has no inbox and `MessageError` (`send-record-failed`) for a record that cannot
+    be written."""
+    leads.inbox_path(shared, to)  # an id that has no inbox path is refused before anything is written
+    row = make_row(sender, to, NOTICE, body, None, now)
+    _written_first(lambda: record_paths_notice(shared, row, sender, card, now), "send", shared)
+    append_row(shared, row)
+    return row
+
+
 def record_refusal(shared, row: dict, session: str, refusal_id: str, now=None) -> None:
     """MW-128: the message record of the inbox write the Stop hook makes itself: event `refusal-delivery`, so it is told apart
     from a `send` of the session."""

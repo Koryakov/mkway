@@ -635,6 +635,25 @@ starts a `git commit`.
   test id, session, `by`); the first card then closes with that test red and the other card's close needs it green.
   The lock gate leaves the one-use by-permit for it, the card tool refuses with `close-not-orderer`, `card-unknown` or
   `card-bad-move`. The merge (full green, K5) and the install keep the full-green rule.
+- **The lead re-records the Paths of an open card it ordered (MW-137, rulings R352 A and R353).** Paths are recorded once,
+  at the first open from `proposed`. When a decision legitimately widens or narrows a card, the lead that ordered it runs
+  `mkway card paths <card> --add <entry> ... --remove <entry> ...`; the owner's terminal may run it too. The rule is that of
+  the lead's open and close (R356): the caller is a registered lead and the card's `Ordered by` is the caller's own session id.
+  A card the owner ordered stays the owner's (the register edit and `card resync`); a card another session ordered is refused,
+  also when that session is or was a lead. A planned change of lead is the existing hand-off: `mkway give <card> <id prefix>`
+  by the lead, then `mkway lead accept <card>` by the new lead (the owner's `give` needs no accept); the new lead then
+  re-records. The card's holder never changes its Paths, also when it is a lead. The lead's intent is in the call, never in the card file,
+  which the holder writes after the open: the engine records only when the card file's Paths equal the recorded set plus
+  the `--add` entries minus the `--remove` entries (else `paths-file-differs`, with the difference printed and nothing
+  recorded), and the entries pass the same check as the first open (`card-paths-too-wide`, also for an empty result). The
+  card is `open`, or `waiting` by its holder; `proposed`, `closed` and the owner's pause are `paths-card-state`. The session
+  id is the lock gate's one-use permit of kind `paths` for that card (a call that claims a session without it is
+  `paths-no-permit`); under `cards.approver: owner-only` the command is the owner's. One row goes into
+  `<state>/paths_changes.jsonl` (time, card, old set, new set, who) before the register changes, one `notice` goes to the
+  holder when there is one (and its record row `paths-notice` into the message record), `mkway board` shows a line for the
+  card, and `mkway scorecard` counts the re-records per card; the owner is not pinged. The other refusals are
+  `paths-not-lead`, `paths-not-orderer`, `paths-by-holder` and `paths-record-failed`; each names a way that works and a
+  test runs it. The `card-paths-changed` text names this command next to the restore and the new-card routes.
 - **Same file name in two test folders (MW-079).** `tests/shell` is a package (it has an `__init__.py`); `tests/core` is
   flat, because `engine/core.py` is imported as `core` and a `tests/core` package would shadow it. A test file in
   `tests/shell` may share its name with a file of a flat folder (`tests/`, `tests/core`), never two files inside the flat ones.

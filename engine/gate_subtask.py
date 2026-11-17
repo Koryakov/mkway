@@ -9,7 +9,8 @@ An edit-tool write inside the root passes when, in this order:
   never from the card file's own Status line);
 - S2: the card is `open` in the register (`card-not-open` otherwise, naming the status and the command that moves it);
 - v3.1: the card file's `Paths` set equals the set the owner's `card open` recorded in the register (entries
-  normalised; order, blanks and spaces ignored), else `card-paths-changed` until the owner opens the card again;
+  normalised; order, blanks and spaces ignored), else `card-paths-changed` until the file is restored to the recorded set, the
+  extra files go under a new card, or the lead that ordered the card re-records the Paths (`card paths`, MW-137);
 - the path is named by a recorded entry (a file, a folder, or a glob), else `file-not-in-card`. An empty `Paths`
   means no file rule.
 A path outside the root (MW-107, R274: the root of the session, and another checkout of the same repository, whatever the folder

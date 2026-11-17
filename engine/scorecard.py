@@ -109,11 +109,22 @@ def unread_state_writes(root, state) -> int:
                if r.get("reason_id") == UNREAD and name in str(r.get("target") or "").replace("\\", "/"))
 
 
+def paths_rerecords(state) -> dict:
+    """MW-137: card id -> how many times its Paths were re-recorded (rows of `paths_changes.jsonl` with a card id)."""
+    import cardtool
+    counts: dict = {}
+    for row in read_rows(Path(state) / cardtool.PATHS_FILE):
+        if isinstance(row.get("card"), str) and row["card"]:
+            counts[row["card"]] = counts.get(row["card"], 0) + 1
+    return dict(sorted(counts.items()))
+
+
 def lines(root, profile) -> list:
     state = profiles.state_dir(root, profile)
     out = ["scorecard"]
     out += [f"refusals {reason}: {n}" for reason, n in refusals_per_reason(state).items()]
     out += [f"retirements {card}: {n}" for card, n in retirements_per_card(root, profile).items()]
+    out += [f"paths re-recorded {card}: {n}" for card, n in paths_rerecords(state).items()]
     found = classification(state)
     if found is not None:
         out.append(f"a/b: real catches {found[0]}, false blocks {found[1]}")

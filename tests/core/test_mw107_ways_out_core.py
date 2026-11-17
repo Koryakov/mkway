@@ -54,7 +54,7 @@ def lead(**kw):
     case("card-paths-changed", cs.decide_subtask, card(now_paths=frozenset({"src/a.py", "src/b.py"})), "card-paths-changed",
          "restore them", card(now_paths=frozenset({"src/a.py"}))),
     case("file-not-in-card", cs.decide_subtask, card("src/b.py"), "file-not-in-card",
-         "add it to the card and ask the owner to `card open CARD-001` again",
+         f"the lead that ordered the card adds it to its Paths: `{CLI} card paths CARD-001 --add <entry>`",
          card("src/b.py", recorded=frozenset({"src/a.py", "src/b.py"}), now_paths=frozenset({"src/a.py", "src/b.py"}))),
     case("lead-no-edit", cs.decide_lead_edit, lead(paths=("src/app.py",)), "lead-no-edit",
          "Write the order there and hand the work to a builder", lead(paths=(ORDER,))),

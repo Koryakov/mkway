@@ -12,6 +12,7 @@
                           --kind full|narrow [--rule <n>] [--seconds <n>]   the owner's: one line of the green record (MW-104)
     mkway.py card new <title> | list | resync [--add-ordered-by] | take <id> | release <id> [--force] | open <id>
                   | close <id> | set <id> open|waiting|closed | release-red <test id> --to <card>
+                  | paths <id> --add <entry> ... --remove <entry> ...   the lead's re-record of an open card's Paths (MW-137)
     mkway.py give <card> <who>      the owner's: who ordered a card (a session id prefix, or `owner`; card MW-011); a
                                     registered lead's give of a card it ordered is a hand-off (MW-017)
     mkway.py lead register | accept <card> | add <id-prefix> | remove <id-prefix>   the lead role (MW-017); add and
@@ -171,6 +172,14 @@ def _parser() -> argparse.ArgumentParser:
     cset.add_argument("card_id")
     cset.add_argument("status")
     _place(cset)
+    cpaths = card_sub.add_parser("paths", allow_abbrev=False,
+                                 help="the lead's: re-record the Paths of an open card it ordered (MW-137); the owner's terminal too")
+    cpaths.add_argument("card_id")
+    cpaths.add_argument("--add", nargs="+", action="extend", default=[], metavar="ENTRY",
+                        help="entries the card may edit from now on; the card file's Paths must already name them")
+    cpaths.add_argument("--remove", nargs="+", action="extend", default=[], metavar="ENTRY",
+                        help="entries the card may no longer edit; the card file's Paths must already lack them")
+    _place(cpaths)
     give = sub.add_parser("give", help="the owner's: set who ordered a card (a session id prefix, or `owner`)")
     give.add_argument("card_id", help="a card id, or a bare number that takes the profile's card prefix")
     give.add_argument("who", help="a prefix of one session id seen in the state records, or `owner`")
@@ -405,6 +414,8 @@ def _owner_only(args, profile=None, root=None):
         return "card resync"
     if sub == "release":
         return "card release --force" if args.force else None
+    if sub == "paths":  # MW-137: the lead's command under `cards.approver: orderer` (decided in `_paths` by the permit); else the owner's
+        return None if profile is None or cardtool.approver(profile) == "orderer" else "card paths"
     if sub not in ("open", "close", "set") or profile is None:
         return None
     if cardtool.approver(profile) == "orderer":  # MW-011: a session's close is the orderer's, decided in `_move`;
@@ -846,6 +857,8 @@ def _card(run: Run, args) -> int:
         return _move(run, args)
     if args.card_command == "release-red":
         return _release_red(run, args)
+    if args.card_command == "paths":
+        return _paths(run, args)
     if args.card_command == "resync":
         diff = register.reseal(root, profile, add_orderer=args.add_ordered_by)
         print("\n".join(diff) if diff else "register: no difference against register.last")
@@ -1127,6 +1140,36 @@ def _release_red(run: Run, args) -> int:
                                  f"release-red` alone, in its plain form, in a session with the engine hooks, or the "
                                  f"owner runs it in their own terminal", reason="close-not-orderer")
     print(cardtool.release_red(run.root, run.profile, run.state, args.test_id.replace("\\", "/"), args.to_card, caller))
+    return 0
+
+
+def _paths(run: Run, args) -> int:
+    """`card paths <id> --add ... --remove ...` (MW-137, R352 A, R353): the lead that ordered an open card re-records its Paths;
+    the owner's terminal may run it too. A session's id is the lock gate's one-use permit for this card, never a word of the
+    command (a call that claims a session with no permit is refused `paths-no-permit`); the card tool decides who may and
+    writes the row, the register and the holder's notice."""
+    card_id = args.card_id
+    if not args.add and not args.remove:
+        return _fail("`mkway card paths` names no entry: give `--add <entry>` and/or `--remove <entry>`")
+    caller = None
+    if run.session:
+        caller = cardtool.take_close_permit(run.state, card_id, "paths")
+        if caller is None:
+            raise cardtool.CardError(f"{card_id}: no hook check of this call was found (none, used, or older than "
+                                     f"{cardtool.PERMIT_SECONDS} s), so the session is not established; run `mkway card paths "
+                                     f"{card_id}` alone, in its plain form, in a session with the engine hooks, or the owner "
+                                     f"runs it in their own terminal", reason="paths-no-permit")
+    change = cardtool.rerecord_paths(run.root, run.profile, card_id, args.add, args.remove, caller)
+    if change.old == change.new:
+        print(f"{card_id} paths: no change; recorded: {'; '.join(change.new) or 'none'}")
+    else:
+        print(f"{card_id} paths re-recorded by {change.by}: {'; '.join(change.new)}")
+    if change.notice:
+        print(f"notice {change.notice['id']} is in the inbox of the holder {change.holder}")
+        print(messages.ping_line(change.notice["id"]))
+    if change.note:
+        print(change.note)
+    run.done("paths", card_id)
     return 0
 
 

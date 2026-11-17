@@ -178,8 +178,9 @@ def test_the_subtask_verdict(facts, reason):
     case("paths-changed-reads-none-for-an-empty-record", subtask(recorded=frozenset(), now_paths=frozenset({"x"})),
          "recorded (none)"),
     case("outside-names-the-paths-and-the-way-out", subtask("src/b.py"),
-         "src/b.py is not in the Paths of CARD-001 (lib/; src/a.py); add it to the card and ask the owner to "
-         "`card open CARD-001` again, or write a new card"),
+         "src/b.py is not in the Paths of CARD-001 (lib/; src/a.py); the lead that ordered the card adds it to its Paths: "
+         "`python mkway/engine/mkway.py card paths CARD-001 --add <entry>` (the card file's Paths must already name it), "
+         "or write a new card"),
     case("the-first-refused-path-is-the-one-named", subtask("src/a.py", "src/b.py", "src/c.py"),
          "src/b.py is not in the Paths"),
 ])
