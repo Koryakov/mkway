@@ -781,9 +781,15 @@ def _new_red(run: "_Run", row: dict, roots):
             judgement = judge(row["failed_ids"], head_ids, card, open_cards, head_seen=seen,
                               closed_cards=closed_cards, inherited=inherited)
     if judgement.blocked:
+        at_head = ()
+        if judgement.new:  # MW-135: a red test that HEAD collects was green there (it is not in HEAD's red), a red proof does not excuse it
+            seen = _head_ids(run)
+            if seen is not None:
+                collected = {norm_id(t) for t in seen}
+                at_head = tuple(i for i in judgement.new if norm_id(i) in collected)
         return gate.refuse("commit-tests-failed", _refusal(judgement, card[0] if card else None, roots,
                                                            row.get("file_errors") or {},
-                                                           _untracked(run.top, run.prefix, row)))
+                                                           _untracked(run.top, run.prefix, row), at_head))
     run.old_red = old_red_list(judgement, card[0] if card else None, row["failed_ids"])
     return gate.warn("commit-tests-still-red", _allow_line(judgement))
 
@@ -1209,11 +1215,14 @@ def _ids(ids, quota: int):
     return "; ".join(shown), len(shown)
 
 
-def _refusal(judgement: Judgement, card_id, roots, errors=None, untracked=()) -> str:
+def _refusal(judgement: Judgement, card_id, roots, errors=None, untracked=(), at_head=()) -> str:
     errors = errors or {}
     quota, parts = MAX_IDS, []
     own = [i for i in judgement.own if i not in judgement.own_why]
-    kinds = [(judgement.new, "new red, not red at HEAD"),
+    existing = [i for i in judgement.new if i in at_head]  # MW-135: collected at HEAD and green there
+    kinds = [([i for i in judgement.new if i not in at_head], "new red, not red at HEAD"),
+             (existing, "new red (not red at HEAD: the test exists at HEAD and was green there, so a red-first commit "
+                        "does not excuse it)"),
              (own, f"red in the Paths of {card_id}, the card of this commit")]
     # MW-108 (R283): an old red in the card's own Paths counts as new unless its take recorded it red; say which case it is
     for why, text in OWN_WHY.items():
@@ -1225,10 +1234,24 @@ def _refusal(judgement: Judgement, card_id, roots, errors=None, untracked=()) ->
         quota -= used
         count = f"{len(ids)}" if used == len(ids) else f"{len(ids)}, first {used} shown"
         parts.append(f"{what} ({count}): {text}" if used else f"{what} ({len(ids)}): not listed here")
+    only_existing = bool(existing) and len(existing) == sum(len(ids) for ids, _what in kinds if ids)
+    if only_existing:  # MW-135: the red-first commit is the very thing that was refused, so it is not offered for this test
+        ways = (f"{_untracked_note(untracked, errors)}Two ways out: put the changed existing test in the same commit as "
+                f"the code change, where the run is green; or write the new expectation as a new test name in the "
+                f"red-first commit, and change or remove the old test in the green commit.")
+        note = (f"; still red and owned by another open card, not blocking: {len(judgement.owned)}"
+                if judgement.owned else "")
+        if judgement.absent:
+            note += f"; absent at HEAD and owned by another open card, not blocking: {len(judgement.absent)}"
+        return f"the tests of the staged tree are red: {'; '.join(parts)}{note}. {ways} {OUT}"
     ways = (f"{_untracked_note(untracked, errors)}Fix them and stage the fix, or commit the tests alone as the "
             f"red-first commit (every staged file under {', '.join(roots)}; that commit may be red).")
     if any(w in ("not-established", "none") for w in judgement.own_why.values()):
         ways += f" {NOT_ESTABLISHED_WAY}"
+    if existing:
+        ways += (" For a test that exists at HEAD and was green there: put the changed test in the same commit as the "
+                 "code change, where the run is green, or write the new expectation as a new test name in the red-first "
+                 "commit and change or remove the old test in the green commit.")
     ways += (f" Plain form of the red-first commit, run alone: `git commit -m \"{card_id or '<card id>'} tests only: "
              f"<what>\" -- <test files>`. Only a new red blocks: an old red does not block a commit.")
     note = (f"; still red and owned by another open card, not blocking: {len(judgement.owned)}"
