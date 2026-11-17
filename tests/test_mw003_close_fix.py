@@ -79,18 +79,6 @@ def test_a_take_never_overrides_a_holder(task):
     assert code != 0 and _reason(err) == "card-not-yours" and "mkway-ok" not in out
 
 
-def test_a_session_pauses_only_its_own_card(task):
-    """M2 (close check): a session's `card set <id> waiting` passes the lock gate only for the card it holds; on a
-    card another session holds, or no one holds, it is `card-not-yours`. Catches: a session that pauses another
-    session's card, which its holder then cannot reopen."""
-    state = task / "mkway" / "state"
-    assert cli(task, "card", "open", "CARD-001")[0] == 0
-    records.append(state, "s1", "take", "CARD-001")
-    assert _shell(task, f"{CLI} card set CARD-001 waiting", session="s2") == "card-not-yours"
-    assert _shell(task, f"{CLI} card set CARD-002 waiting", session="s2") == "card-not-yours"
-    assert _shell(task, f"{CLI} card set CARD-001 waiting", session="s1") == "allow"
-
-
 def test_a_session_release_of_another_sessions_card_changes_nothing(task):
     """M3 (close check): a `release` row a session writes for a card another session holds leaves the holder in
     place; the holder's own release frees it. Catches: a holder rule that drops a card on anyone's release."""
@@ -103,13 +91,15 @@ def test_a_session_release_of_another_sessions_card_changes_nothing(task):
 
 
 def test_the_owners_release_of_a_held_card_needs_force(task):
-    """L1 (close check; E22 as written): the owner's plain `card release <id>` of a card a session holds refuses and
-    names `--force`; `--force` frees it. Catches: a `--force` flag that is parsed and never read."""
+    """L1 (close check; E22 as written; changed by MW-045 E1): the owner's plain `card release <id>` of a card a
+    session holds now frees it, as `--force` does (the crashed-holder ruling). Catches: an owner who needs a flag to
+    free a card, or a `--force` flag that stops working."""
     state = task / "mkway" / "state"
     records.append(state, "s1", "take", "CARD-001")
     code, _out, err = cli(task, "card", "release", "CARD-001")
-    assert code != 0 and _reason(err) == "card-not-yours" and "--force" in err
-    assert records.holders(state) == {"CARD-001": "s1"}
+    assert code == 0, err
+    assert records.holders(state) == {}
+    records.append(state, "s1", "take", "CARD-001")
     assert cli(task, "card", "release", "CARD-001", "--force")[0] == 0
     assert records.holders(state) == {}
 

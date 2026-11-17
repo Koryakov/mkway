@@ -35,7 +35,7 @@ main worktree's mirror of the root, names the folder, and never removes anything
 | E6 | `install --shared <path>` | no flag | writes the key (new or existing profile); a relative path refused, nothing written | tests/test_mw026_state_in_root.py::test_install_shared_writes_the_key_into_the_profile |
 | E7 | `check`, files in the main worktree's mirror | silent | warning `state-outside-root` with the folder, exit unchanged, nothing removed | tests/test_mw026_state_in_root.py::test_check_warns_state_outside_root_for_files_in_the_main_worktrees_mirror |
 | E7 | the same through the whole `mkway check` | silent | the line in the output, exit 0 | tests/test_mw026_state_in_root.py::test_check_prints_the_state_outside_root_line |
-| E8 | register, changelog, version, KEYS, README | no word | register row, `## 0.2.6` on top, `VERSION` 0.2.6, `state.shared_dir` row (default unset), README opt-in sentences | tests/test_mw026_state_in_root.py::test_register_changelog_version_keys_and_readme_name_the_card |
+| E8 | register, changelog, version, KEYS, README | no word | register row, a line under the release that names the card, VERSION: see VERSION, `state.shared_dir` row (default unset), README opt-in sentences | tests/test_mw026_state_in_root.py::test_register_changelog_version_keys_and_readme_name_the_card |
 
 ## 8. Log
 
@@ -48,3 +48,4 @@ main worktree's mirror of the root, names the folder, and never removes anything
 | 2026-11-11 | `VERSION` pin `0.2.1` changed to `0.2.3` in the tests of MW-016, MW-017, MW-018, MW-022, MW-023, MW-024 (a patch release); MW-025 builds 0.2.2 in parallel, the operator merges the two version lines | the commit that carries this line | reading, to confirm |
 | 2026-11-11 | whole suite, `python -m pytest`, term scan included | the commit that carries this line | 840 passed in 412 s (831 on the base, 9 new); no term-scan exception added |
 | 2026-11-11 | ported onto master d02df9f (MW-028 merged, MW-029 ported before it): the release is `0.2.6`, not `0.2.3`; row E8 and its test now read `## 0.2.6` and `VERSION` 0.2.6; the version pins of MW-016, MW-017, MW-018, MW-022, MW-023, MW-024, MW-025, MW-028 read 0.2.6 where they check the current version; the changelog line of MW-029 moved from `## 0.2.2` to `## 0.2.6`, so MW-029 row E8 and its test read `## 0.2.6` | the commit that carries this line | reading, to confirm |
+| 2026-11-12 | MW-040: row E8 named a release number or an old VERSION | the commit that carries this line | the row says «see VERSION» and «the release that names the card»; its test reads the VERSION file and finds the card's changelog line (`tests/_docs.py`), no release number is pinned |

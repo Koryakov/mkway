@@ -12,8 +12,13 @@ commands). It refuses:
   `card set <id> <status>` while that status is in `cards.owner_moves`. The one exception (R19c): the holding
   session's `card set <id> open` passes when the sealed register's current status of that card is `waiting`;
 - a session's `card take` while it holds a card that is not closed (`session-has-card`, R15 A2), and a take or a
-  release of a card another session holds (`card-not-yours`, v3.1).
+  release of a card another session holds (`card-not-yours`, v3.1); MW-045: the session that ordered the card may
+  release it (a one-use permit), and a holder unseen for `cards.stale_hours` no longer blocks a take.
 Every refusal quotes the path and the lock name. It allows everything else.
+
+MW-063: the decisions are `core_lock.decide`, a pure function of facts. This module is the shell: it reads the facts
+the core asks for (the markers, the register, the records, git, the command reader), asks again until the core has
+what it needs, leaves the one-use permits and the log row, and returns the verdict.
 """
 from __future__ import annotations
 
@@ -23,244 +28,219 @@ import re
 import subprocess
 
 import cardtool
+import core_lock
 import gate
 import helpers
 import leads
+import ledger
 import locks
 import logs
+import messages
 import profiles
 import register
 import runner
 
-SHELL_TOOLS = ("Bash", "PowerShell")
-_VARIABLE = re.compile(r"[$`%(){}]")
-WHY = {"unparsed": "the shell text or a Python body does not parse",
-       "capable": "a computed path, a variable, or a program that can write anywhere"}
-PATH_KEYS = ("file_path", "notebook_path", "path")
-CLI = "python mkway/engine/mkway.py"
-TERMINAL = "the owner runs it in their own terminal, where no hook runs"
+SHELL_TOOLS = core_lock.SHELL_TOOLS
+_positional = core_lock.positional  # the lead gate reads a command's words the same way
+CLI = core_lock.CLI
+TERMINAL = core_lock.TERMINAL
+MAX_READS = 200  # a decision asks for each fact once; a gate that asks for more than this is a bug
 
 
-def _owner_moves(profile) -> list:
+def _owner_moves(profile) -> tuple:
     cards = profile.get("cards") if isinstance(profile, dict) else None
     moves = cards.get("owner_moves") if isinstance(cards, dict) else None
-    return moves if isinstance(moves, list) else ["open", "closed"]
+    return tuple(moves) if isinstance(moves, list) else ("open", "closed")
 
 
-def _closed(ctx, profile, rel, how):
-    """The refusal for a path inside a closed target, or one that holds a closed target (list item 2), or None."""
-    target = locks.closed_target(ctx.root, profile, rel, ctx.profile_file)
-    if target:
-        return _refuse_target(target, rel, how)
-    held = locks.held_target(ctx.root, profile, rel, ctx.profile_file)
-    if held:
-        return _refuse_target(held[0], rel, how, holds=held[1])
-    return None
+EXPANDED = ("APPDATA", "USERPROFILE", "HOME", "XDG_CONFIG_HOME", "MKWAY_UPGRADE_DIR")  # the variables that build a folder of the guard
+_NAME = "(?i:" + "|".join(EXPANDED) + ")" if helpers.CASE_FOLD else "(?:" + "|".join(EXPANDED) + ")"  # the name keeps the OS case rule
+_FORM = re.compile(  # the `env:` prefix is read in any case on every OS (PowerShell's Env: drive)
+    r"\$\{(?i:env:)?(?P<braced>" + _NAME + r")(?:(?P<op>:-|:=|:\?|:\+|-|=|\?|\+)(?P<word>[^{}]*))?\}"
+    r"|\$(?i:env:)?(?P<plain>" + _NAME + r")(?!\w)"
+    r"|%(?P<percent>" + _NAME + r")%")
+_KEY = {name.casefold(): name for name in EXPANDED}
 
 
-def _fix(target) -> str:
-    """The way out named in a refusal for the closed target."""
-    if target.open_by_default:  # the owner hold (MW-010)
-        return (f"hold by the owner; wait for the owner's word (the owner lifts it with `{CLI} lock open "
-                f"{target.name}`, {TERMINAL})")
-    if target.name in locks.NEVER_OPEN:
-        return "only the engine's own commands write it"
-    if target.built_in:
-        return f"the owner may open it with `{CLI} lock open {target.name}` ({TERMINAL})"
-    return f"ask the owner to open it: `{CLI} lock open {target.name}` ({TERMINAL})"
+class Outside:
+    """MW-105 (R260 a to c, R260a, R260b, R260d to R260g): the class of a path that may lie outside the repository, read for one
+    hook call. `upgrade`: the path equals the guarded upgrade folder (either of its two folders), lies below it, or is one of its
+    ancestors, compared on real paths (`helpers._canon`: links, `..`, 8.3 names, case on Windows) with a separator boundary; for
+    a glob path, its literal head's folder is compared. `unc`: a network path, decided on the raw text before any other step, and
+    a path outside the repository whose real form starts with two slashes (a mapped drive); a network guard entry is compared as
+    folded text, never resolved on disk. `~` is the home `mkway upgrade` resolves: HOME, else USERPROFILE.
+    A shell path is first expanded from the environment of the call (`_expand`): the five variables that build the folder
+    (`EXPANDED`) in the forms `$env:X` (the prefix in any case), `${env:X}`, `$X`, `${X}`, `%X%` and the operator forms `${X:-d}`,
+    `${X-d}`, `${X:=d}`, `${X=d}`, `${X:?d}`, `${X:+w}`, always, whatever the command does to the name (R260f), so a command that
+    re-points one and writes under it is refused on the real folder; in a PowerShell call `$HOME` is HOME, else USERPROFILE
+    (R260g). A name missing from the environment, any other variable and the other operators stay unexpanded: such a path has no
+    class (the core's literal-reach rule reads it)."""
+
+    def __init__(self, ctx, targets):
+        self.ctx, self._targets, self._folders, self._root_canon = ctx, targets, None, None
+        self.env = dict(ctx.env) if ctx.env else {}
+        self.home = self.env.get("HOME") or self.env.get("USERPROFILE") or None
+        self.prefix = None
+
+    @property
+    def folders(self) -> tuple:
+        """The canonical form of each folder entry of the closed `upgrade` target, read on first use; a network entry is its
+        folded text (nothing is resolved on disk for it)."""
+        if self._folders is None:
+            self._folders = tuple(helpers._fold(e.rstrip("/")) if helpers.is_unc(e) else helpers._canon(e.rstrip("/"))
+                                  for t in self._targets if t.closed and t.name == core_lock.UPGRADE for e in t.entries)
+        return self._folders
+
+    def _in_repo(self, canon: str) -> bool:
+        """True when the canonical path is the repository's real path or lies below it, on a separator boundary: a repo on a
+        mapped drive has a real path that starts with two slashes, and none of its paths is a network path for that reason."""
+        if self._root_canon is None:
+            self._root_canon = helpers._canon(str(self.ctx.root))
+        root = self._root_canon.rstrip("/")
+        return canon.rstrip("/") == root or canon.startswith(root + "/")
+
+    def _value(self, name: str):
+        """The value of an expandable name in the environment of the call; in a PowerShell call `$HOME` is the profile."""
+        if name == "HOME" and self.ctx.tool_name == "PowerShell":
+            return self.env.get("HOME") or self.env.get("USERPROFILE")
+        return self.env.get(name)
+
+    def _expand(self, text: str, values: dict) -> str:
+        """The text with each expandable form replaced; a value becomes a token (`values` maps token to value), so a value that
+        holds a character of a variable form (a parenthesis in a folder name) is not read as one. `${X:-d}`, `${X-d}`, `${X:=d}`
+        and `${X=d}` give X when it is set (non-empty for the colon forms), else d, expanded once more (a word holds no brace, so one pass reads all of it); `${X:?d}` gives
+        X; `${X:+w}` gives w, expanded once more, when X is set (non-empty for the colon form), else nothing. A name that is
+        missing or empty is left as it is."""
+        def token(value: str) -> str:
+            values[f"\x00{len(values)}\x00"] = value
+            return f"\x00{len(values) - 1}\x00"
+
+        def sub(m):
+            name = _KEY[(m.group("braced") or m.group("plain") or m.group("percent")).casefold()]
+            value, op = self._value(name), m.group("op")
+            if op is None:
+                return token(value) if value else m.group(0)
+            is_set = value is not None and (value != "" or not op.startswith(":"))
+            if op[-1] in "-=":
+                return token(value) if is_set else self._expand(m.group("word"), values)
+            if op[-1] == "?":
+                return token(value) if is_set and value else m.group(0)
+            return self._expand(m.group("word"), values) if is_set else ""
+
+        return _FORM.sub(sub, text)
+
+    def classify(self, raw: str, *, shell: bool, cwd=None):
+        if helpers.is_unc(raw):
+            return core_lock.UNC
+        text = helpers.strip_device_prefix(helpers._clean(raw))
+        if shell:
+            values: dict = {}
+            text = self._expand(text, values)
+            if core_lock.VARIABLE.search(text):
+                return None
+            for token, value in values.items():
+                text = text.replace(token, value)
+            if helpers.is_unc(text):
+                return core_lock.UNC
+        if self.prefix is None:
+            self.prefix = helpers.top_prefix(self.ctx.root)
+        full = helpers.absolute(helpers.strip_stream(text) if helpers.CASE_FOLD else text, self.ctx.root,
+                                top_prefix=self.prefix, home=self.home, cwd=cwd)
+        if full is None:
+            return None
+        if shell and any(ch in full for ch in "*?["):
+            full = helpers.glob_head_folder(full) + "/"  # the folder before the first wildcard; "/" keeps a drive's own root
+        canon = helpers._canon(full)
+        if canon.startswith("//") and not self._in_repo(canon):  # a share by its real path, unless it is the repo's own (C4, F1, G3)
+            return core_lock.UNC
+        return core_lock.UPGRADE if any(helpers.touches_folder(g, canon) for g in self.folders) else None
 
 
-def _glob_inside(ctx, profile, rel):
-    """`lock-closed-shell` when the glob path `rel`'s literal folder (before its first wildcard) lies inside a closed
-    target (close-fix 2, B-H1: `mkway/engine/*`); None otherwise."""
-    if rel is None:
-        return None
-    head = rel[:min(i for i, ch in enumerate(rel) if ch in "*?[")]
-    folder = head.rsplit("/", 1)[0] if "/" in head else ""
-    target = locks.closed_target(ctx.root, profile, folder, ctx.profile_file) if folder else None
-    if target is None:
-        return None
-    fix = _fix(target)
-    return gate.refuse("lock-closed-shell", f"{rel} is a glob inside {folder}, which is inside the closed lock "
-                                            f"{target.name!r}; {fix}")
-
-
-def _refuse_target(target, rel, how, holds=None):
-    if target.name == "locks" and holds is None:
-        return gate.refuse("lock-file-by-session", f"{rel} is a lock file: lock files are written only by the "
-                                                   f"owner's `mkway lock open|close` ({TERMINAL})")
-    reason = {"edit": "lock-closed-edit", "shell": "lock-closed-shell", "commit": "lock-closed-commit"}[how]
-    fix = _fix(target)
-    if holds is not None:
-        return gate.refuse(reason, f"{rel} holds {holds}, which is inside the closed lock {target.name!r}; {fix}")
-    return gate.refuse(reason, f"{rel} is inside the closed lock {target.name!r}; {fix}")
+def _note_problems(event, ctx, profile, tool_input, problems) -> None:
+    """One log row for the folders of the upgrade guard the hook could not resolve (R260d C6, C7): the home cannot be found, or an
+    override is not an absolute path. It is the guard's own row (it carries a `note`), not a path the session wrote; a failed
+    write never fails the call."""
+    try:
+        logs.write_refusal(profiles.state_dir(ctx.root, profile), logs.row(
+            session=ctx.session_id, event=event, tool=ctx.tool_name, gate=ctx.gate, reason_id="write-target-unresolved",
+            target=logs.target_of(tool_input), kind="log", note="; ".join(problems)))
+    except OSError:
+        pass
 
 
 def check(event, ctx):
     profile = ctx.profile if isinstance(ctx.profile, dict) else {}
     tool_input = ctx.tool_input if isinstance(ctx.tool_input, dict) else {}
-    if ctx.tool_name in SHELL_TOOLS:
-        command = tool_input.get("command")
-        return _shell(ctx, profile, command if isinstance(command, str) else "")
-    for key in PATH_KEYS:
-        value = tool_input.get(key)
-        if isinstance(value, str) and value:
-            verdict = _closed(ctx, profile, ctx.norm(value), "edit")
-            if verdict:
-                return verdict
+    shell = ctx.tool_name in core_lock.SHELL_TOOLS
+    command = tool_input.get("command") if shell else None
+    targets = locks.core_targets(ctx.root, profile, ctx.profile_file, env=ctx.env)
+    outside = Outside(ctx, targets)
+    problems = locks.upgrade_resolution(ctx.env)[1]
+    if problems:
+        _note_problems(event, ctx, profile, tool_input, problems)
+    paths = () if shell else tuple(
+        tool_input[key] for key in core_lock.PATH_KEYS if isinstance(tool_input.get(key), str) and tool_input.get(key))
+    cwd = edit_cwd(ctx)  # MW-107 (round-2 item 1): one base for a relative edit path in every gate of the edit group
+    facts = core_lock.Facts(
+        tool_name=ctx.tool_name,
+        command=command if isinstance(command, str) else "",
+        targets=targets,
+        session_id=ctx.session_id,
+        edit_rels=tuple(ctx.norm(path, cwd=cwd) for path in paths),
+        edit_classes=tuple((path, outside.classify(path, shell=False, cwd=cwd)) for path in paths),
+        vcs_git=profiles.vcs(profile) == "git",
+        owner_moves=_owner_moves(profile),
+        orderer=cardtool.approver(profile) == "orderer",
+        stale_hours=profiles.cards_stale_hours(profile),
+        register_rel=ctx.norm(str(register.path(ctx.root, profile))),
+        owner_terminal=cardtool.OWNER_TERMINAL,
+        owner_fix=register.OWNER_FIX,
+        owner_name=register.OWNER)
+    reader = Reader(ctx, profile, facts.command, outside)
+    for _ in range(MAX_READS):
+        verdict = core_lock.decide(facts)
+        if verdict.kind != core_lock.NEED:
+            return _finish(ctx, profile, verdict)
+        facts = facts.with_read(verdict.need, reader.read(verdict.need))
+    raise RuntimeError("the lock gate asked for more facts than it has")
+
+
+def _finish(ctx, profile, verdict):
+    """The one-use permits the core named, then the verdict as the dispatcher reads it."""
+    if verdict.permits:
+        state = profiles.state_dir(ctx.root, profile)
+        for permit in verdict.permits:
+            ok = True
+            if permit.kind == "by" and permit.scope == "messaging":
+                messages.issue_message_permit(state, ctx.session_id)  # MW-110, R279c Q1: the session's own file
+            elif permit.kind == "by":
+                cardtool.issue_by_permit(state, ctx.session_id)
+            elif permit.kind == "close":
+                ok = cardtool.issue_close_permit(state, permit.card, ctx.session_id)
+            else:
+                ok = cardtool.issue_close_permit(state, permit.card, ctx.session_id, kind=permit.kind)
+            if not ok and permit.on_fail is not None:
+                return _gate_verdict(permit.on_fail)
+    return _gate_verdict(verdict)
+
+
+def _gate_verdict(v):
+    if v.kind == core_lock.REFUSE:
+        return gate.refuse(v.reason, v.text)
+    if v.kind == core_lock.LOG:
+        return gate.log(v.reason, v.text)
     return gate.allow()
 
 
-def _positional(args: list) -> list:
-    out, i = [], 0
-    while i < len(args):
-        a = args[i]
-        if a in ("--root", "--profile", "--minutes", "--text", "--source", "--from", "--ref", "--vcs", "--python"):
-            i += 2
-            continue
-        if not a.startswith("-"):
-            out.append(a)
-        i += 1
-    return out
-
-
-def _status(ctx, profile, card_id):
-    """The sealed register's status of a card; raises RegisterError when the seal fails."""
-    register.check(ctx.root, profile)
-    row = register.find(register.read(ctx.root, profile), card_id)
-    return row.get("status") if row else None
-
-
-def _owner_only(what: str):
-    return gate.refuse("owner-only-command", f"`mkway {what}` is the owner's command: {TERMINAL}. A session never "
-                                             "grants itself a card or a lock and never declares itself done")
-
-
-def _close_by_orderer(ctx, profile, card_id, held):
-    """MW-011, `cards.approver: orderer`: a session's `card close`. The orderer must be this session (the id of the
-    hook input) and not the card's holder; the gate then leaves the one-use permit the CLI reads. The status and the
-    tests are the CLI's to check."""
-    if not card_id:
-        return None  # the CLI refuses a close with no card id
-    register.check(ctx.root, profile)
-    row = register.find(register.read(ctx.root, profile), card_id)
-    if row is None:
-        return None  # the CLI says `card-unknown`
-    problem = cardtool.orderer_problem(row, held, ctx.session_id)
-    if problem:
-        return gate.refuse(problem[0], problem[1])
-    if not cardtool.issue_close_permit(profiles.state_dir(ctx.root, profile), card_id, ctx.session_id):
-        return gate.refuse("close-not-orderer", f"{card_id}: the permit of this close could not be written; "
-                                                f"{cardtool.OWNER_TERMINAL}")
-    return None
-
-
-def _open_by_lead(ctx, profile, card_id, shared):
-    """MW-028, `cards.approver: orderer`: a registered lead's `card open` of a proposed card it ordered leaves the
-    one-use permit the CLI reads; any other card (the owner's, another session's, one past `proposed`) stays the
-    owner's to open."""
-    if not card_id:
-        return None  # the CLI refuses an open with no card id
-    register.check(ctx.root, profile)
-    row = register.find(register.read(ctx.root, profile), card_id)
-    if row is None:
-        return None  # the CLI says `card-unknown`
-    problem = cardtool.open_problem(row, ctx.session_id, leads.is_lead(shared, ctx.session_id))
-    if problem:
-        return gate.refuse("owner-only-command", problem[1])
-    if not cardtool.issue_close_permit(profiles.state_dir(ctx.root, profile), card_id, ctx.session_id, kind="open"):
-        return _owner_only("card open")
-    return None
-
-
-def _call(ctx, profile, args: list):
-    pos = _positional(args)
-    if not pos:
+def edit_cwd(ctx):
+    """MW-107 (R274e 11, round-2 reader item 1): the folder a relative edit-tool path is joined to, the hook input's cwd read as
+    an absolute path (a relative cwd is read from the root, as the shell reader reads it; None when the input names none). The
+    lock, outside, subtask and lead gates all read a relative edit path from this one base."""
+    if not (isinstance(ctx.cwd, str) and ctx.cwd.strip()):
         return None
-    head = pos[0]
-    if head == "lock" and pos[1:2] and pos[1] in ("open", "close"):
-        return _owner_only(" ".join(pos[:2]))
-    if head == "gate" and pos[1:2] and pos[1] in ("off", "on", "watch"):  # `watch`: MW-012
-        return _owner_only(" ".join(pos[:2]))
-    if head in ("install", "upgrade", "hold", "go", "delivered"):  # `hold` and `go`: the short forms of the lock close
-        return _owner_only(head)                                   # and open; `delivered` (MW-020): the owner's base
-    state = profiles.state_dir(ctx.root, profile)  # the permits stay in this work tree's state folder
-    if head == "built":  # MW-020: the provenance row names the session; the CLI reads it from this one-use permit
-        cardtool.issue_by_permit(state, ctx.session_id)
-        return None
-    shared = profiles.shared_state_dir(ctx.root, profile)  # the leads cross work trees (MW-017)
-    if head == "give":  # MW-011: the owner says who ordered a card; MW-017: a registered lead's give is a hand-off
-        if not leads.is_lead(shared, ctx.session_id):
-            return _owner_only(head)
-        cardtool.issue_by_permit(state, ctx.session_id)  # the CLI reads the session id from this one-use permit
-        return None
-    if head == "lead" and pos[1:2]:  # MW-017: `lead add|remove` are the owner's; register and accept name the session
-        if pos[1] in ("add", "remove"):
-            return _owner_only(f"lead {pos[1]}")
-        if pos[1] in ("register", "accept"):
-            cardtool.issue_by_permit(state, ctx.session_id)
-        return None
-    if (head == "ledger" and pos[1:2] == ["add"]) or (head == "ask" and pos[1:2] == ["default"]) or head in (
-            "ack", "send", "inbox"):
-        cardtool.issue_by_permit(state, ctx.session_id)  # MW-015: names the session (MW-017: `ack`; MW-018: `send`, `inbox`)
-        return None
-    if head != "card" or len(pos) < 2:
-        return None
-    sub, card_id = pos[1], (pos[2] if len(pos) > 2 else None)
-    if sub == "new":  # MW-017: a lead's new card gets its order file; the CLI reads who ran it from the permit
-        if leads.is_lead(shared, ctx.session_id):
-            cardtool.issue_by_permit(state, ctx.session_id)
-        return None
-    moves = _owner_moves(profile)
-    if sub == "resync":
-        return _owner_only("card resync")
-    held = ctx.records.holders()
-    if sub == "release":
-        if any(a == "--force" or a.startswith("--force=") for a in args):
-            return _owner_only("card release --force")
-        holder = held.get(card_id)
-        if holder and holder != ctx.session_id:
-            return gate.refuse("card-not-yours", f"{card_id} is held by another session; a session releases only "
-                                                 f"its own card. The owner frees it with `{CLI} card release "
-                                                 f"{card_id} --force` ({TERMINAL})")
-        return None
-    orderer = cardtool.approver(profile) == "orderer"
-    if sub == "close" and orderer:
-        return _close_by_orderer(ctx, profile, card_id, held)
-    if sub == "open" and orderer and "open" in moves and leads.is_lead(shared, ctx.session_id):
-        return _open_by_lead(ctx, profile, card_id, shared)  # MW-028
-    if sub in ("open", "close"):
-        status = "open" if sub == "open" else "closed"
-        return _owner_only(f"card {sub}") if status in moves else None
-    if sub == "set":
-        status = pos[3] if len(pos) > 3 else None
-        if status == "closed" and orderer:  # MW-011: `closed` by a session goes through `card close` only
-            return _owner_only("card set closed")
-        if status == "waiting" and (not card_id or held.get(card_id) != ctx.session_id):
-            return gate.refuse("card-not-yours", f"{card_id} is not the card this session holds; a session pauses "
-                                                 f"only its own card (`{CLI} card take <id>` first)")
-        if status not in moves:
-            return None
-        if status == "open" and card_id and held.get(card_id) == ctx.session_id:
-            if _status(ctx, profile, card_id) == "waiting":
-                return None  # R19c: the holder reopens its own pause
-        return _owner_only(f"card set {status}")
-    if sub == "take":
-        holder = held.get(card_id)
-        if holder and holder != ctx.session_id:
-            return gate.refuse("card-not-yours", f"{card_id} is held by another session. The owner frees it with "
-                                                 f"`{CLI} card release {card_id} --force` ({TERMINAL})")
-        mine = ctx.records.card()
-        if mine and mine != card_id and _status(ctx, profile, mine) != "closed":
-            return gate.refuse("session-has-card", f"this session holds {mine}, which is not closed: one card per "
-                                                   f"session. Free it with `{CLI} card release {mine}` first")
-        for other_card, other in held.items():  # MW-034: one builder per task root, so one worktree and one index
-            if other != ctx.session_id and _status(ctx, profile, other_card) == "open":
-                return gate.refuse("take-root-busy", f"session {other[:8]} already holds {other_card} in this task "
-                                                     f"root: one builder per worktree and index. Wait until that "
-                                                     f"session closes or hands off {other_card}, or work in your "
-                                                     f"own worktree")
-    return None
+    env = ctx.env if isinstance(ctx.env, dict) else {}
+    return helpers.absolute(ctx.cwd, ctx.root, top_prefix=helpers.top_prefix(ctx.root),
+                            home=env.get("USERPROFILE") or env.get("HOME") or None)
 
 
 def _start(ctx):
@@ -270,170 +250,184 @@ def _start(ctx):
     return None if rel is None else ("" if rel == "." else rel)
 
 
-def _shell(ctx, profile, command: str):
-    shell = "powershell" if ctx.tool_name == "PowerShell" else "bash"
-    start = _start(ctx)
-    # H4 (R54): the exact form first, then the call's own rules; false blocks (E98): a variable assigned a literal in
-    # the same command is read, so `python $D/tool.py` is no disguised engine script
-    if helpers.holds_engine_call(command, shell, root=ctx.root, start=start):
-        problem = helpers.engine_call_problem(command, profiles.bundle_root(profile), ctx.norm)
-        if problem:
-            return gate.refuse("engine-call-not-plain", f"the engine call is refused: {problem}. Run the mkway "
-                                                        f"command alone, in its plain form: `{CLI} <command> "
-                                                        f"<args>`")
-    try:
-        for args in ctx.mkway_calls(command):
-            verdict = _call(ctx, profile, args)
-            if verdict is not None:
-                return verdict
-        if profiles.vcs(profile) == "git" and not helpers.parse_ok(command, shell) and \
-                helpers.names_git_commit(command):  # list item 7 (R43 point 2): an integrity gate fails closed
-            return gate.refuse("command-unparsed", "this command cannot be parsed and holds a `git ... commit`, so "
-                                                   "its commit cannot be checked; run the commit alone, in a plain "
-                                                   "form: `git commit -m \"<message>\" -- <paths>`")
-        carrier = helpers.carried_commit(command, shell) if profiles.vcs(profile) == "git" else None
-        if carrier:  # close-fix 3 (B-H5, R83), remainder item 1 (R95 (2a)): an unread commit fails closed
-            return gate.refuse("command-unparsed", f"this command may run a `git ... commit` the gate cannot read "
-                                                   f"(through {carrier}), so its commit cannot be checked; run the "
-                                                   "commit alone, in a plain form: `git commit -m \"<message>\" -- "
-                                                   "<paths>`")
-        form = (helpers.git_form_problem(command, shell, profiles.git_builtins_extra(profile))
-                if profiles.vcs(profile) == "git" else None)
-        if form:  # close-fix 8 (A-M2, R83): a git form the reader cannot check is refused outright
-            return gate.refuse(form[0], f"{form[1]}, so its effect cannot be checked; run the plain form: `git commit "
-                                        f"-m \"<message>\" -- <paths>` with exact option names")
-        env = helpers.env_problem(command, shell)
-        if env:  # close-fix 7 (B-H4), remainder item 8 (H7): an `env` the gate cannot read
-            return gate.refuse("command-unparsed", f"{env}; run the command directly, without that `env` option")
-        if helpers.cdpath_cd(command, shell):  # remainder item 10 (H5b): `cd` under `CDPATH` lands where it is not named
-            return gate.refuse("command-unparsed", "this command holds `CDPATH` and a `cd`, so the folder it runs in "
-                                                   "cannot be read; run the `cd` without `CDPATH`, to a literal folder")
-        writes = ctx.shell_writes(command)
-        why = writes.reason
-        for path in writes.paths:
-            if _VARIABLE.search(path):  # a variable or substitution path is `capable` (R43)
-                why = why or helpers.CAPABLE
-                continue
-            rel = ctx.norm(path)
-            if any(ch in path for ch in "*?["):  # a glob: refused when it matches a closed target or its folder
-                hit = locks.glob_target(ctx.root, profile, rel, ctx.profile_file)
-                if hit:
-                    return _refuse_target(hit[0], rel, "shell", holds=hit[1])
-                inside = _glob_inside(ctx, profile, rel)
-                if inside:
-                    return inside
-                continue
-            verdict = _closed(ctx, profile, rel, "shell")  # (a)
-            if verdict:
-                return verdict
-        pending = None
-        if why:
-            hit = locks.named_target(ctx.root, profile, command, ctx.profile_file) or locks.named_target(
-                ctx.root, profile, helpers.expanded_text(command, shell, root=ctx.root, start=start),
-                ctx.profile_file)  # item 12: expanded too
-            if hit:  # (b) literal reach
-                return gate.refuse("lock-closed-shell", f"this command's write targets cannot all be read ({why}: "
-                                                        f"{WHY[why]}), and it names {hit[1]}, which is inside the "
-                                                        f"closed lock {hit[0].name!r}; split it into plain commands "
-                                                        f"that write literal paths")
-            pending = gate.log("write-target-unresolved", f"write targets not read ({why}: {WHY[why]})")  # (c)
-        if profiles.vcs(profile) == "git":
-            for commit in ctx.commit_cmd(command):
-                verdict = _commit(ctx, profile, commit)
-                if verdict is not None:
-                    return verdict
-            shape = helpers.unknown_shape(command, shell)
-            if shape and helpers.names_git_commit(command):  # remainder item 10 (R95 (1b)): a commit the shape hides
-                return gate.refuse("command-unparsed", f"this command holds a shape the gate does not follow "
-                                                       f"({shape}) and names a `git ... commit`, so its commit cannot "
-                                                       "be checked; run the commit alone, in a plain form: `git "
-                                                       "commit -m \"<message>\" -- <paths>`")
-    except register.RegisterError as exc:
-        return gate.refuse(exc.reason, exc.message)
-    except subprocess.TimeoutExpired as exc:  # list item 11 (R44 row 4)
-        return gate.refuse("gate-git-timeout", f"a git read did not answer within {exc.timeout:g} s, so the commit "
-                                               f"could not be checked; run it again")
-    return pending or gate.allow()
+class Reader:
+    """Reads the one fact the core asks for, by its key (`("register",)`, `("expanded", 0)`, ...)."""
 
+    def __init__(self, ctx, profile, command: str, outside=None):
+        self.ctx, self.profile, self.command = ctx, profile, command
+        self.outside = outside or Outside(ctx, locks.core_targets(ctx.root, profile, ctx.profile_file, env=ctx.env))
+        self.shell = "powershell" if ctx.tool_name == "PowerShell" else "bash"
+        self.start = _start(ctx) if ctx.tool_name in core_lock.SHELL_TOOLS else None
+        self._commits: list = []  # (the reader's commit, the folder it runs in as a repo path or None)
+        self._holders = None
+        self._lead = None
 
-def remind(event, ctx):
-    """The `unresolved` gate (prompt group, list item 5, R43 (c)): at the next prompt, the count of this session's
-    `write-target-unresolved` rows not yet reminded, once per row. It reads the log and writes nothing."""
-    path = profiles.state_dir(ctx.root, ctx.profile if isinstance(ctx.profile, dict) else {}) / logs.REFUSALS
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return gate.allow()
-    count = 0
-    for n, line in enumerate(lines):
+    def read(self, key: tuple):
+        return getattr(self, "fact_" + key[0])(*key[1:])
+
+    # ---- what the command reader says
+    def fact_engine_call(self):
+        # H4 (R54): the exact form first; false blocks (E98): a variable assigned a literal in the same command is read
+        if helpers.holds_engine_call(self.command, self.shell, root=self.ctx.root, start=self.start):
+            return helpers.engine_call_problem(self.command, profiles.bundle_root(self.profile), self.ctx.norm)
+        return None
+
+    def fact_calls(self):
+        return tuple(tuple(args) for args in self.ctx.mkway_calls(self.command))
+
+    def fact_parse_ok(self):
+        return helpers.parse_ok(self.command, self.shell)
+
+    def fact_names_commit(self):
+        return helpers.names_git_commit(self.command)
+
+    def fact_carrier(self):
+        return helpers.carried_commit(self.command, self.shell)
+
+    def fact_form(self):
+        return helpers.git_form_problem(self.command, self.shell, profiles.git_builtins_extra(self.profile))
+
+    def fact_env(self):
+        return helpers.env_problem(self.command, self.shell)
+
+    def fact_cdpath(self):
+        return helpers.cdpath_cd(self.command, self.shell)
+
+    def fact_unknown_shape(self):
+        return helpers.unknown_shape(self.command, self.shell)
+
+    def fact_expanded_text(self):
+        return helpers.expanded_text(self.command, self.shell, root=self.ctx.root, start=self.start)
+
+    def fact_writes(self):
+        writes = self.ctx.shell_writes(self.command, home=self.outside.home)
+        return core_lock.WriteFacts(writes.reason, tuple(self._write_entry(path) for path in writes.paths))
+
+    def _write_entry(self, path):
+        """(text, repo path) of one written path; MW-105: a third item, its class, when it is `upgrade` or `unc`."""
+        entry = (path, None if core_lock.VARIABLE.search(path) else self.ctx.norm(path))
+        cls = self.outside.classify(path, shell=True)
+        return entry + (cls,) if cls else entry
+
+    def fact_commits(self):
+        out = []
+        for commit in self.ctx.commit_cmd(self.command):
+            cwd = commit.cwd
+            if cwd:  # close-fix 14 (B-M1): an absolute folder, a Git-Bash one (`/c/...`) included, as a repo path first
+                rel = self.ctx.norm(cwd)
+                if rel is not None:
+                    cwd = None if rel == "." else rel
+            self._commits.append((commit, cwd))
+            folder = (self.ctx.root / cwd) if cwd else None
+            out.append(core_lock.CommitFacts(
+                folder_unreadable=bool(commit.folder_unreadable), paths=tuple(commit.paths),
+                include=bool(commit.include), amend=bool(commit.amend), all=bool(commit.all),
+                rels=tuple(self.ctx.norm(p, cwd=folder) for p in commit.paths)))
+        return tuple(out)
+
+    # ---- what the markers and the disk say
+    def fact_disk(self, rel, entry):
+        return locks._file_in(self.ctx.root, rel, entry)
+
+    def fact_seal(self):
+        sha_file = register.sha_path(self.ctx.root, self.profile)
+        if not sha_file.is_file():
+            return core_lock.Seal(sha_file.name, False)
+        seal = sha_file.read_text(encoding="utf-8").strip()
+        reg = register.path(self.ctx.root, self.profile)
+        work = hashlib.sha256(reg.read_bytes()).hexdigest() if reg.is_file() else None
+        return core_lock.Seal(sha_file.name, True, seal, work)
+
+    # ---- what git says (a read that does not answer in time is a fact, `Timeout`)
+    def fact_expanded(self, i):
+        commit, cwd = self._commits[i]
+        folder = (self.ctx.root / cwd) if cwd else self.ctx.root
+        return self._names(lambda: _expand(self.ctx, folder, list(commit.paths)))
+
+    def fact_staged(self, i):
+        def read():
+            proc = runner.git(self.ctx.root, "diff", "--cached", "--name-only")
+            if proc.returncode != 0:  # list item 3: a failed read refuses, never an empty list
+                return [], f"git exit {proc.returncode}"
+            return [self.ctx.norm(p) for p in proc.stdout.splitlines() if p.strip()], None
+        return self._names(read)
+
+    def fact_index(self, i, every):
+        return self._names(lambda: _index_names(self.ctx, every))
+
+    def fact_blob(self, rel):
         try:
-            row = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(row, dict) and row.get("session") == ctx.session_id and \
-                row.get("reason_id") == "write-target-unresolved" and row.get("kind") == "log" and \
-                ctx.once([f"row {n}"]):  # the reminder's own warn row is not counted
-            count += 1
-    if not count:
-        return gate.allow()
-    return gate.warn("write-target-unresolved", f"{count} of your shell commands since the last prompt wrote to "
-                                                f"targets the lock gate could not read (not blocked, logged). A "
-                                                f"lock-target path built without its literal is not seen: write "
-                                                f"literal paths")
+            proc = runner.git(self.ctx.root, "cat-file", "blob", f":./{rel}", text=False)  # list item 3: from the root
+        except subprocess.TimeoutExpired as exc:  # list item 11 (R44 row 4)
+            return core_lock.Timeout(exc.timeout)
+        if proc.returncode != 0:
+            return core_lock.Blob(None, proc.returncode)
+        return core_lock.Blob(hashlib.sha256(proc.stdout).hexdigest(), 0)
+
+    @staticmethod
+    def _names(read):
+        try:
+            names, problem = read()
+        except subprocess.TimeoutExpired as exc:  # list item 11 (R44 row 4)
+            return core_lock.Timeout(exc.timeout)
+        return core_lock.Names(tuple(names), problem)
+
+    # ---- what the records, the register and the leads say
+    def _held(self):
+        if self._holders is None:
+            self._holders = dict(self.ctx.records.holders())
+        return self._holders
+
+    def fact_holders(self):
+        return self._held()
+
+    def fact_mine(self):
+        return self.ctx.records.card()
+
+    def fact_stale(self):
+        return cardtool.stale_holders(self.ctx.root, self.profile, self._held())
+
+    def fact_lead(self):
+        if self._lead is None:
+            self._lead = leads.is_lead(profiles.shared_state_dir(self.ctx.root, self.profile), self.ctx.session_id)
+        return self._lead
+
+    def fact_register(self):
+        """The sealed register as facts: the seal's refusal, or each row with the card tool's answers for this session."""
+        root, profile, session = self.ctx.root, self.profile, self.ctx.session_id
+        try:
+            register.check(root, profile)
+        except register.RegisterError as exc:
+            return core_lock.RegisterFacts(problem=(exc.reason, exc.message))
+        held, lead = self._held(), self.fact_lead()
+        rows = {}
+        for row in register.read(root, profile):
+            rows.setdefault(row.get("id"), core_lock.Row(
+                status=row.get("status"), ordered_by=row.get(register.ORDERED) or register.OWNER,
+                orderer_problem=cardtool.orderer_problem(row, held, session),
+                open_problem=cardtool.open_problem(row, session, lead)))
+        return core_lock.RegisterFacts(rows=rows)
+
+    def fact_quote_rel(self, value):
+        return self.ctx.norm(value) if self.ctx.norm else None
+
+    def fact_quote_folders(self):
+        return (profiles.owner_ask(self.profile)["dir"], f"{profiles.bundle_root(self.profile)}/{ledger.LEDGER_DIR}")
 
 
-def _commit(ctx, profile, commit):
-    if commit.folder_unreadable:  # list item 9 (R44 row 2)
-        return gate.refuse("commit-folder-unreadable", "this commit runs in a folder the gate cannot read (a `cd` or "
-                                                       "`-C` to a variable or an unreadable target), so its paths "
-                                                       "cannot be checked; `cd` to a literal folder, or commit from "
-                                                       "the root with repo paths")
-    unresolved = [p for p in commit.paths if "$" in p or "`" in p]  # `:(glob)` pathspec magic is not one
-    if unresolved:  # list item 12 (R44 row 5): only a path still unresolved after the same-command expansion
-        return gate.refuse("pathspec-unparsed", f"the commit path {unresolved[0]} holds a variable or a substitution "
-                                                f"that is not a literal assigned earlier in this command, so it "
-                                                f"cannot be checked; name the path literally")
-    reg_rel = ctx.norm(str(register.path(ctx.root, profile)))
-    cwd = commit.cwd
-    if cwd:  # close-fix 14 (B-M1): an absolute folder, a Git-Bash one (`/c/...`) included, as a repo path first
-        rel = ctx.norm(cwd)
-        if rel is not None:
-            cwd = None if rel == "." else rel
-    rels = [ctx.norm(p, cwd=(ctx.root / cwd) if cwd else None) for p in commit.paths]
-    if commit.paths:  # list item 2: a pathspec is the changed tracked files it matches, each checked
-        expanded, problem = _expand(ctx, (ctx.root / cwd) if cwd else ctx.root, commit.paths)
-        if problem:
-            return gate.refuse("lock-closed-commit", f"the commit pathspec could not be expanded ({problem}), so "
-                                                     f"its files could not be checked; name plain paths")
-        rels += [r for r in expanded if r not in rels]
-    staged = []
-    if commit.include:
-        proc = runner.git(ctx.root, "diff", "--cached", "--name-only")
-        if proc.returncode != 0:  # list item 3: a failed read refuses, never an empty list
-            return gate.refuse("lock-closed-commit", f"the staged names could not be read (git exit "
-                                                     f"{proc.returncode}), so the commit could not be checked")
-        staged = [ctx.norm(p) for p in proc.stdout.splitlines() if p.strip()]
-    elif commit.amend or not commit.paths:  # list item 16 (R68): the commit takes the index, or with -a the changes
-        names, problem = _index_names(ctx, commit.all and not commit.paths)
-        if problem:
-            return gate.refuse("lock-closed-commit", f"the files this commit takes could not be read ({problem}), "
-                                                     f"so it could not be checked; name your paths after `--`")
-        for rel in names:
-            verdict = _index_commit(ctx, profile, rel, reg_rel, commit.all and not commit.paths)
-            if verdict is not None:
-                return verdict
-    for rel in rels + staged:
-        if rel is None:
-            continue
-        if rel == reg_rel:
-            verdict = _register_commit(ctx, profile, rel, rel in staged or commit.include)
-            if verdict is not None:
-                return verdict
-            continue
-        target = locks.closed_target(ctx.root, profile, rel, ctx.profile_file)
-        if target:
-            return _refuse_target(target, rel, "commit")
-    return None
+def _expand(ctx, folder, specs: list):
+    """(repo paths, problem): the files a `git commit -- <specs>` takes, from `folder`. With a HEAD, the tracked
+    files that differ from it (the commit takes their working-tree content); with no HEAD yet, the index. A git exit
+    that is not 0 is a problem, never an empty list."""
+    proc = runner.git(folder, "diff", "--name-only", "--no-renames", "HEAD", "--", *specs)
+    if proc.returncode != 0:
+        head = runner.git(folder, "rev-parse", "--verify", "-q", "HEAD")
+        if head.returncode == 0:
+            return [], f"git exit {proc.returncode}"
+        proc = runner.git(folder, "ls-files", "--full-name", "--", *specs)
+        if proc.returncode != 0:
+            return [], f"git exit {proc.returncode}"
+    return [ctx.norm(p) for p in proc.stdout.splitlines() if p.strip()], None
 
 
 def _index_names(ctx, every: bool):
@@ -453,57 +447,27 @@ def _index_names(ctx, every: bool):
     return [ctx.norm(p) for p in proc.stdout.splitlines() if p.strip()], None
 
 
-def _index_commit(ctx, profile, rel, reg_rel, every: bool):
-    """The refusal for one file a commit with no pathspec takes, naming the session's own step; or None."""
-    if rel is None:
-        return None
-    if rel == reg_rel:
-        return _register_commit(ctx, profile, rel, not every)
-    target = locks.closed_target(ctx.root, profile, rel, ctx.profile_file)
-    if not target:
-        return None
-    if every:
-        return gate.refuse("lock-closed-commit", f"{rel} has a change inside the closed lock {target.name!r} and "
-                                                 f"`-a` would commit it; commit without -a and name your own paths "
-                                                 f"after `--`")
-    return gate.refuse("lock-closed-commit", f"{rel} is staged and inside the closed lock {target.name!r}; unstage "
-                                             f"it with `git restore --staged {rel}` and commit without it")
-
-
-def _expand(ctx, folder, specs: list):
-    """(repo paths, problem): the files a `git commit -- <specs>` takes, from `folder`. With a HEAD, the tracked
-    files that differ from it (the commit takes their working-tree content); with no HEAD yet, the index. A git exit
-    that is not 0 is a problem, never an empty list."""
-    proc = runner.git(folder, "diff", "--name-only", "--no-renames", "HEAD", "--", *specs)
-    if proc.returncode != 0:
-        head = runner.git(folder, "rev-parse", "--verify", "-q", "HEAD")
-        if head.returncode == 0:
-            return [], f"git exit {proc.returncode}"
-        proc = runner.git(folder, "ls-files", "--full-name", "--", *specs)
-        if proc.returncode != 0:
-            return [], f"git exit {proc.returncode}"
-    return [ctx.norm(p) for p in proc.stdout.splitlines() if p.strip()], None
-
-
-def _register_commit(ctx, profile, rel, include_index):
-    sha_file = register.sha_path(ctx.root, profile)
-    if not sha_file.is_file():
-        return gate.refuse("lock-closed-commit", f"{rel}: {sha_file.name} is missing, so the register cannot be "
-                                                 f"checked; {register.OWNER_FIX}")
-    seal = sha_file.read_text(encoding="utf-8").strip()
-    reg = register.path(ctx.root, profile)
-    work = hashlib.sha256(reg.read_bytes()).hexdigest() if reg.is_file() else None
-    if work != seal:
-        return gate.refuse("lock-closed-commit", f"{rel} differs from its seal; only the engine's own commands "
-                                                 f"write it. {register.OWNER_FIX}")
-    if include_index:
-        proc = runner.git(ctx.root, "cat-file", "blob", f":./{rel}", text=False)  # list item 3: from the root
-        if proc.returncode != 0:
-            return gate.refuse("lock-closed-commit", f"the staged {rel} could not be read (git exit "
-                                                     f"{proc.returncode}), so it could not be checked against its "
-                                                     f"seal; stage it with `git add {rel}` or leave it out")
-        staged = hashlib.sha256(proc.stdout).hexdigest()
-        if staged != seal:
-            return gate.refuse("lock-closed-commit", f"the staged {rel} differs from its seal; only the engine's own "
-                                                     f"commands write it. {register.OWNER_FIX}")
-    return None
+def remind(event, ctx):
+    """The `unresolved` gate (prompt group, list item 5, R43 (c)): at the next prompt, the count of this session's
+    `write-target-unresolved` rows not yet reminded, once per row. It reads the log and writes nothing."""
+    path = profiles.state_dir(ctx.root, ctx.profile if isinstance(ctx.profile, dict) else {}) / logs.REFUSALS
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return gate.allow()
+    count = 0
+    for n, line in enumerate(lines):
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict) and row.get("session") == ctx.session_id and not row.get("note") and \
+                row.get("reason_id") == "write-target-unresolved" and row.get("kind") == "log" and \
+                ctx.once([f"row {n}"]):  # the reminder's own warn row is not counted
+            count += 1
+    if not count:
+        return gate.allow()
+    return gate.warn("write-target-unresolved", f"{count} of your shell commands since the last prompt wrote to "
+                                                f"targets the lock gate could not read (not blocked, logged). A "
+                                                f"lock-target path built without its literal is not seen: write "
+                                                f"literal paths")

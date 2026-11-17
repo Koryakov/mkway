@@ -106,7 +106,8 @@ def check(profile, schema=None) -> list:
     return errors
 
 
-BUILT_IN_TARGETS = ("engine", "lock", "profile", "hooks", "locks", "gitignore", "gitattributes", "register", "state")
+BUILT_IN_TARGETS = ("engine", "lock", "profile", "hooks", "locks", "gitignore", "gitattributes", "register", "state",
+                    "upgrade")  # `upgrade`: MW-105 (R260b 2)
 
 
 def _hold_flag(profile, errors: list) -> None:

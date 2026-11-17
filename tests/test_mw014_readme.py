@@ -23,38 +23,46 @@ def _section():
 
 
 def test_one_section_with_a_body():
-    """E17: one heading `## Asks that do not stop the work`, with a body. Catches: a missing or doubled section."""
+    """Checks: one heading `## Asks that do not stop the work`, with a body (E17)."""
+    # Catches: a missing or doubled section
     assert README.read_text(encoding="utf-8").count("\n" + HEADING + "\n") == 1
     assert len(_section()) > 800
 
 
 def test_the_section_names_every_reason_key_and_command():
-    """E17: every reason id the manifest declares for the new steps and every reason of the two commands, the three
-    profile keys, the five field lines, the four statuses, the three commands and the two placeholders are in the text.
-    Catches: a refusal a session will meet that the README does not explain."""
+    """Checks: every reason, key, command, file line and placeholder of the section is in its text (E17)."""
+    # every reason id the manifest declares for the new steps and every reason of the two commands, the three profile
+    # keys, the five field lines, the four statuses, the three commands and the two placeholders are in the text;
+    # Catches: a refusal a session will meet that the README does not explain
     flat = _section()
     manifest = json.loads((REPO / "engine" / "manifest.json").read_text(encoding="utf-8"))["entries"]
     reasons = {r for e in manifest if e["gate"] == "owner_ask" for r in e["reason_ids"]
                if r.startswith(("ask-fields", "ask-already", "ask-tool", "ask-past", "ask-record", "notify-"))}
     assert len(reasons) == 7
-    for reason in sorted(reasons) + list(COMMAND_REASONS):
-        assert f"`{reason}`" in flat, reason
-    for key in ("owner_ask.max_open", "owner_ask.tool_allowed", "notify.command"):
-        assert f"`{key}`" in flat, key
-    for line in ("`default: <text or none>`", "`deadline: <ISO local time or none>`", "`blocked: <what waits, or none>`",
-                 "`reversible: yes|no`", "`status: open`", "`answered`", "`default-taken`", "`withdrawn`",
-                 "`mkway asks`", "`mkway ask default <id>`", "`mkway ask answered <id>`", "`--quote-file`",
-                 "`{file}`", "`{line}`", "`AskUserQuestion`", "`open asks: N (oldest <age>)", "`ask-default`"):
-        assert line in flat, line
+    missing_reasons = [r for r in sorted(reasons) + list(COMMAND_REASONS) if f"`{r}`" not in flat]
+    assert not missing_reasons, missing_reasons
+    missing_keys = [k for k in ("owner_ask.max_open", "owner_ask.tool_allowed", "notify.command") if f"`{k}`" not in flat]
+    assert not missing_keys, missing_keys
+    missing_lines = [line for line in (
+        "`default: <text or none>`", "`deadline: <ISO local time or none>`", "`blocked: <what waits, or none>`",
+        "`reversible: yes|no`", "`status: open`", "`answered`", "`default-taken`", "`withdrawn`",
+        "`mkway asks`", "`mkway ask default <id>`", "`mkway ask answered <id>`", "`--quote-file`",
+        "`{file}`", "`{line}`", "`AskUserQuestion`", "`open asks: N (oldest <age>)", "`ask-default`")
+        if line not in flat]
+    assert not missing_lines, missing_lines
 
 
 def test_the_section_states_the_never_default_list_and_marks_the_example():
-    """E17: the method rule lists what is never taken by default (anything irreversible, anything that leaves the task,
-    deletes, locks and windows, the owner's own words), and the notify command shown is marked as an example with no
-    channel shipped. Catches: a list that leaves out a case, or an example that reads as the engine's own channel."""
+    """Checks: the method rule lists what is never taken by default, and the notify command is marked as an example (E17)."""
+    # the list leaves out no case: irreversible, leaves the task, deletes, locks and windows, the owner's own words;
+    # the example reads as an example with no channel shipped, and is the one generic HTTP push with a placeholder;
+    # Catches: a list that leaves out a case, or an example that reads as the engine's own channel
     flat = _section().lower()
-    for item in ("irreversible", "leaves the task", "deletes", "locks and windows", "the owner's own words"):
-        assert item in flat, item
-    assert "never" in flat and "default" in flat
-    assert "example" in flat and "ships no channel" in flat
-    assert "curl" in flat  # the one generic example: an HTTP push service, with a placeholder address
+    missing_items = [item for item in ("irreversible", "leaves the task", "deletes", "locks and windows",
+                                       "the owner's own words") if item not in flat]
+    assert not missing_items, missing_items
+    assert "never" in flat
+    assert "default" in flat
+    assert "example" in flat
+    assert "ships no channel" in flat
+    assert "curl" in flat

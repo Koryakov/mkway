@@ -13,10 +13,13 @@ install --from <engine repo> [--ref <sha or tag>] into a task root:
   committed task folder has the copy and its hooks with no install;
 - generates the hook entries into the committed `<root>/.claude/settings.json` (C23, C24; MW-027) and strips mkway's
   own entries from an older `settings.local.json`;
-- removes the exact line `engine/` an earlier install wrote into that `.gitignore` (MW-035);
-- with vcs git it ends by printing ONE line, `git add <paths>; git commit -m "<message>" -- <paths>` (the commit takes
-  only install's paths, MW-035), or with `--commit` (the owner's terminal only) runs it; the message starts with
-  `commit.message_prefix` when the profile sets it.
+- removes the line `engine/` (also `/engine/` and `engine`, after stripping spaces and `\r`) an earlier install wrote
+  into that `.gitignore` (MW-035, MW-041), keeping every other line and the file's own line ending style;
+- with vcs git it ends by printing ONE line, `git -C "<root>" add <paths>; git -C "<root>" commit -m "<message>" --
+  <paths>` (the commit takes only install's paths, MW-035; the root is named, so the line works from any folder,
+  MW-041), or with `--commit` (the owner's terminal only) runs it; the message starts with
+  `commit.message_prefix` when the profile sets it; MW-036: the paths are only what install writes (settings file,
+  bundle `.gitignore`, `.gitattributes`, `mkway.lock`, `engine`, and the profile when this run created it).
 It never reads or writes the user's home folder.
 
 check: compares the copy's hash with the lock, runs the copy's tests (without `engine_repo`), and runs the term
@@ -45,22 +48,14 @@ import paths
 import profiles
 import schema_check
 
-SET_FILES = ("mkway.py", "VERSION", "cards/_TEMPLATE/CARD.md",  # MW-016: the version travels with the copy
-             "cards/_TEMPLATE/ORDER.md")  # MW-017: the order file of a lead's card
-SET_DIRS = ("engine/", "tools/", "tests/", "fixtures/synthetic/")
-SKIP_PARTS = {".git", "__pycache__", ".pytest_tmp", ".pytest_cache"}
-BUNDLE_FOLDERS = ("cards", "ledger", "locks", "state")  # created by install
-IGNORED_FOLDERS = ("locks", "state")  # R18: cards/ and ledger/ are tracked; MW-027: so is the engine copy
-RUNTIME_IGNORES = ("__pycache__/", "*.pyc", ".pytest_tmp/", ".pytest_cache/")  # written when the copy runs or is checked
-IGNORE_HEAD = ("# mkway install: locks, state and what the copy writes at run time are not tracked; the engine copy, "
-               "profile.json, mkway.lock, cards and ledger are")
-SETTINGS_FILE = ".claude/settings.json"  # MW-027: the committed hook entries
+import core_install as core
+from core_install import (ATTRIBUTES_HEAD, BUNDLE_FOLDERS, ENGINE_ATTRIBUTE, EVENT_ORDER, FAILED_NAMES_MAX,  # noqa: F401
+                          FLOOR_SECONDS, IGNORE_HEAD, IGNORED_FOLDERS, LAUNCHER_NAMES, MARGIN_SECONDS,
+                          MATCHER_EVENTS, MIN_PYTHON, PY_FLAGS, QUOTED_EXE, REGISTER_ATTRIBUTE, RUNTIME_IGNORES,
+                          SET_DIRS, SET_FILES, SETTINGS_FILE, SKIP_PARTS, STALE_ENGINE_IGNORES, UNQUOTED_EXE,
+                          VERSION_FLAG, failed_names, files_hash, in_set, owned_marker, starter_profile)
+
 LOCAL_SETTINGS_FILE = ".claude/settings.local.json"  # the owner's own per-machine file; mkway keeps no entry in it
-EVENT_ORDER = ("SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "SubagentStart", "SubagentStop",
-               "Stop")  # MW-004: the two agent events, no matcher (every agent), so not in MATCHER_EVENTS
-MATCHER_EVENTS = ("PreToolUse", "PostToolUse")
-FLOOR_SECONDS = 10   # the least timeout of an entry
-MARGIN_SECONDS = 15  # added to every entry's timeout (R13c)
 ENGINE_DIR = Path(__file__).resolve().parent  # the engine's own files (the group table); never the task root
 MACHINE_FILE = "machine.json"  # <state.dir>/machine.json: the per-machine interpreter, untracked (C27)
 GIT = ["git", "--no-optional-locks"]
@@ -72,13 +67,7 @@ class InstallError(Exception):
 
 # ---- the file set and the hash ----------------------------------------------------------------------------------
 
-def _skipped(rel: str) -> bool:
-    return rel.endswith(".pyc") or any(part in SKIP_PARTS for part in rel.split("/"))
-
-
-def in_set(rel: str) -> bool:
-    rel = rel.replace("\\", "/")
-    return not _skipped(rel) and (rel in SET_FILES or rel.startswith(SET_DIRS))
+_skipped = core.skipped
 
 
 def _walk(folder: Path):
@@ -96,13 +85,10 @@ def folder_files(src: Path) -> dict:
 
 
 def copy_hash(copy: Path) -> str:
-    """sha256 over the sorted paths and bytes of the copy (C26: caches and test temp files left out)."""
-    digest = hashlib.sha256()
-    for rel, path in sorted((r, p) for r, p in _walk(copy) if not _skipped(r)):
-        data = path.read_bytes()
-        digest.update(rel.encode("utf-8") + b"\0" + str(len(data)).encode("ascii") + b"\0")
-        digest.update(data)
-    return "sha256:" + digest.hexdigest()
+    """sha256 over the sorted paths and bytes of the copy (C26: caches and test temp files left out). Reads the disk:
+    `mkway check` and the start line use it to verify what is there."""
+    return core.hash_entries((rel, path.read_bytes())
+                             for rel, path in sorted((r, p) for r, p in _walk(copy) if not _skipped(r)))
 
 
 def _writable(func, path, _exc):
@@ -171,13 +157,7 @@ def source_files(src: Path, ref=None):
 
 # ---- hook entries -------------------------------------------------------------------------------------------------
 
-def owned_marker(bundle_root: str) -> str:
-    return f'"${{CLAUDE_PROJECT_DIR}}/{bundle_root}/engine/mkway.py" hook'
-
-
-def _loadable_on(profile, e) -> bool:
-    return bool(e.get("function")) and bool(e.get("reason_ids")) and e.get("event") in EVENT_ORDER and \
-        profiles.gate_on(profile, e.get("gate", e.get("name", "")), e.get("default_on", False))
+_loadable_on = core.loadable_on
 
 
 def group_table(engine_dir: Path = ENGINE_DIR) -> dict:
@@ -185,139 +165,31 @@ def group_table(engine_dir: Path = ENGINE_DIR) -> dict:
     return json.loads((Path(engine_dir) / "manifest.json").read_text(encoding="utf-8")).get("groups", {})
 
 
-PY_FLAGS = "-I -X utf8"  # R111 (a): no per-user Python folder, no PYTHONPATH; UTF-8 text
-
-
 def generate_entries(profile, manifest, *, profile_rel=None, python=None, groups_table=None) -> list:
-    """One entry per event and group with a gate on, plus the start entry (C23): event, group, matcher (the union
-    of the group's gate matchers; None = every tool), command, timeout and on_failure (the group table's).
-    Timeout (C23, R13c): the sum over the group's gates of (the profile's budget_seconds, else the manifest timeout)
-    + 15 s, at least 10 s, so the dispatcher's own stop comes before the platform's."""
-    python = python or ((profile.get("python") or {}).get("command") if isinstance(profile, dict) else None) \
-        or "python"
+    """The hook entries of the profile and manifest (the decision is `core_install.generate_entries`); the group table
+    is read from the engine's manifest unless given."""
     table = group_table() if groups_table is None else groups_table
-    bundle = profiles.bundle_root(profile)
-    groups = {("SessionStart", "start"): []}
-    for e in manifest:
-        if _loadable_on(profile, e):
-            groups.setdefault((e["event"], e.get("group")), []).append(e)
-    keys = sorted(groups, key=lambda k: EVENT_ORDER.index(k[0]))
-    out = []
-    for event, group in keys:
-        gates = groups[(event, group)]
-        matcher = None
-        if event in MATCHER_EVENTS and gates and all(g.get("matcher") not in (None, "", "*") for g in gates):
-            parts = []
-            for g in gates:
-                parts += [p for p in g["matcher"].split("|") if p not in parts]
-            matcher = "|".join(parts)
-        seconds = 0
-        for g in gates:
-            budget = profiles.budget_seconds(profile, g.get("gate", g.get("name", "")))
-            if budget is not None:
-                seconds += budget
-            elif isinstance(g.get("timeout"), (int, float)) and not isinstance(g.get("timeout"), bool):
-                seconds += g["timeout"]
-        timeout = max(FLOOR_SECONDS, math.ceil(seconds + MARGIN_SECONDS))
-        command = f'{python} {PY_FLAGS} "${{CLAUDE_PROJECT_DIR}}/{bundle}/engine/mkway.py" hook {event} --group {group}'
-        if profile_rel:
-            command += f' --profile "${{CLAUDE_PROJECT_DIR}}/{profile_rel}"'
-        on_failure = (table.get(group) or {}).get("onFailure")
-        out.append({"event": event, "group": group, "matcher": matcher, "command": command, "timeout": timeout,
-                    "on_failure": on_failure})
-    return out
-
-
-def _value_span(text: str, key: str):
-    """(start, end) of a top-level key's value in a JSON object text, or None."""
-    decoder = json.JSONDecoder()
-    ws = re.compile(r"\s*")
-    i = ws.match(text, 0).end()
-    if text[i:i + 1] != "{":
-        return None
-    i = ws.match(text, i + 1).end()
-    while i < len(text) and text[i] != "}":
-        name, i = json.decoder.scanstring(text, i + 1)
-        i = ws.match(text, i).end() + 1  # the colon
-        i = ws.match(text, i).end()
-        _value, end = decoder.raw_decode(text, i)
-        if name == key:
-            return i, end
-        i = ws.match(text, end).end()
-        if text[i:i + 1] == ",":
-            i = ws.match(text, i + 1).end()
-    return None
-
-
-def _is_owned(handler, marker) -> bool:
-    return isinstance(handler, dict) and isinstance(handler.get("command"), str) and marker in handler["command"]
+    return core.generate_entries(profile, manifest, table, profile_rel=profile_rel, python=python)
 
 
 def write_settings(path: Path, entries: list, bundle_root: str) -> None:
-    """Replace the owned entries; keep every other top-level key byte for byte and every handler mkway does not
-    own (C24). Only documented fields: matcher, hooks, type, command, timeout, onFailure (R13c)."""
+    """Write the settings file the core decided on (owned entries replaced, everything else kept byte for byte)."""
     path = Path(path)
-    marker = owned_marker(bundle_root)
     text = path.read_text(encoding="utf-8") if path.is_file() else None
-    try:
-        data = json.loads(text) if text is not None else {}
-    except json.JSONDecodeError as exc:
-        raise InstallError(f"{path.name} is not valid JSON (line {exc.lineno}); it was not changed") from None
-    hooks = data.get("hooks", {}) if isinstance(data, dict) else None
-    if not isinstance(hooks, dict):
-        raise InstallError(f"{path.name}: `hooks` is not an object; it was not changed")
-    new: dict = {}
-    for event, groups in hooks.items():
-        kept = []
-        for group in groups if isinstance(groups, list) else []:
-            handlers = group.get("hooks") if isinstance(group, dict) else None
-            if not isinstance(handlers, list):
-                kept.append(group)
-                continue
-            rest = [h for h in handlers if not _is_owned(h, marker)]
-            if rest:
-                kept.append(dict(group, hooks=rest) if len(rest) != len(handlers) else group)
-        if kept:
-            new[event] = kept
-    for e in entries:
-        group = {"matcher": e["matcher"]} if e["matcher"] else {}
-        handler = {"type": "command", "command": e["command"], "timeout": e["timeout"]}
-        if e.get("on_failure"):
-            handler["onFailure"] = e["on_failure"]  # R13c: a documented handler key
-        group["hooks"] = [handler]
-        new.setdefault(e["event"], []).append(group)
-    value = json.dumps(new, indent=2).replace("\n", "\n  ")
-    if text is None:
-        out = '{\n  "hooks": ' + value + "\n}\n"
-    else:
-        span = _value_span(text, "hooks")
-        if span:
-            out = text[:span[0]] + value + text[span[1]:]
-        else:
-            close = text.rstrip().rindex("}")
-            head = text[:close].rstrip()
-            sep = "" if head.endswith("{") else ","
-            out = head + sep + '\n  "hooks": ' + value + "\n" + text[close:]
+    verdict = core.settings_text(text, entries, bundle_root, path.name)
+    if verdict.kind == core.REFUSE:
+        raise InstallError(verdict.text)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(out, encoding="utf-8")
+    path.write_text(verdict.out, encoding="utf-8")
 
 
 def live_entries(path: Path, bundle_root: str) -> list:
     """The owned entries in a settings file, as whole entries: event, matcher, command, timeout, onFailure."""
     try:
-        data = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        text = Path(path).read_text(encoding="utf-8")
+    except OSError:
         return []
-    marker = owned_marker(bundle_root)
-    out = []
-    hooks = data.get("hooks") if isinstance(data, dict) else None
-    for event, groups in (hooks or {}).items():
-        for group in groups if isinstance(groups, list) else []:
-            for h in (group.get("hooks") or []) if isinstance(group, dict) else []:
-                if _is_owned(h, marker):
-                    out.append({"event": event, "matcher": group.get("matcher"), "command": h["command"],
-                                "timeout": h.get("timeout"), "on_failure": h.get("onFailure")})
-    return out
+    return core.owned_entries(text, bundle_root)
 
 
 # ---- install --------------------------------------------------------------------------------------------------------
@@ -329,29 +201,20 @@ def detect_vcs(root: Path) -> str:
     return "git" if top is not None and Path(root).resolve().is_relative_to(top) else "none"
 
 
-def starter_profile(vcs: str) -> dict:
-    bundle = profiles.DEFAULT_BUNDLE_ROOT
-    return {
-        "vcs": vcs,
-        "bundle": {"root": bundle},
-        "ids": {"card_prefix": "CARD"},
-        "gates": {},
-        "state": {"dir": profiles.DEFAULT_STATE_DIR},
-        "python": {"command": "python"},
-    }
+def _read_text_raw(path: Path) -> str:
+    """The file's text with its line ends untouched (MW-041): a CRLF file stays CRLF."""
+    return path.read_bytes().decode("utf-8") if path.is_file() else ""
 
 
 def _ensure_lines(path: Path, head: str, lines: list) -> None:
-    text = path.read_text(encoding="utf-8") if path.is_file() else ""
-    have = set(text.splitlines())
-    missing = [line for line in lines if line not in have]
-    if not missing:
-        return
-    if text and not text.endswith("\n"):
-        text += "\n"
-    if head not in have:
-        missing.insert(0, head)
-    path.write_text(text + "\n".join(missing) + "\n", encoding="utf-8")
+    text = _read_text_raw(path)
+    out = core.ensure_lines(text, head, lines)
+    if out != text:
+        _write_text_raw(path, out)
+
+
+def _write_text_raw(path: Path, text: str) -> None:
+    path.write_bytes(text.encode("utf-8"))
 
 
 def _inside(path: Path, root: Path) -> bool:
@@ -359,11 +222,6 @@ def _inside(path: Path, root: Path) -> bool:
     return Path(path).resolve().is_relative_to(Path(root).resolve())
 
 
-UNQUOTED_EXE = re.compile(r"[A-Za-z0-9_./:-]+")  # no space, no backslash, no shell character
-QUOTED_EXE = re.compile(r'"([^"$`%!\n\r]*[^"$`%!\n\r\\])"')  # inside double quotes: no `"`, `$`, backtick, `%`, `!`
-VERSION_FLAG = re.compile(r"-[0-9]+(\.[0-9]+)?")
-LAUNCHER_NAMES = ("py", "py.exe")  # the Windows launcher: the only program that takes the version flag (C34)
-MIN_PYTHON = (3, 9)
 VERSION_PROBE = "import sys; print(sys.version_info[:2])"
 
 
@@ -377,23 +235,12 @@ def plain_interpreter(text, timeout=30) -> bool:
 
 def interpreter_problem(text, timeout=30):
     """None when `text` passes the interpreter rule (see `plain_interpreter`); else "timeout" when the program did
-    not answer within `timeout` seconds (it and its children are stopped), or "invalid" (fix check 3 L5)."""
-    if not isinstance(text, str):
+    not answer within `timeout` seconds (it and its children are stopped), or "invalid" (fix check 3 L5). The syntax and
+    the answer are judged by the core; this reads PATH and runs the probe."""
+    parsed = core.interpreter_syntax(text)
+    if parsed is None:
         return "invalid"
-    m = re.fullmatch(r'("[^"]*"|\S+)(?: (\S+))?', text)
-    if not m:
-        return "invalid"
-    exe, flag = m.group(1), m.group(2)
-    q = QUOTED_EXE.fullmatch(exe)
-    if q:
-        path = q.group(1)
-    elif UNQUOTED_EXE.fullmatch(exe):
-        path = exe
-    else:
-        return "invalid"
-    if flag is not None and (not VERSION_FLAG.fullmatch(flag)
-                             or re.split(r"[\\/]", path)[-1].lower() not in LAUNCHER_NAMES):
-        return "invalid"
+    path, flag = parsed
     found = shutil.which(path)
     if found is None:
         return "invalid"
@@ -412,9 +259,7 @@ def interpreter_problem(text, timeout=30):
             return "timeout"
     finally:
         _close_job(job)
-    version = re.fullmatch(r"\((\d+), (\d+)\)", (out or "").strip())
-    ok = proc.returncode == 0 and version is not None and (int(version[1]), int(version[2])) >= MIN_PYTHON
-    return None if ok else "invalid"
+    return None if core.version_answer_ok(proc.returncode, out) else "invalid"
 
 
 KILL_SECONDS = 4   # the kill step's own limit; probe 5 + kill 4 + drain 2 = 11 s, under the start entry's 15 s
@@ -567,22 +412,29 @@ def _replace_copy(bdir: Path, copy: Path, files: dict, bundle: str):
     return old if moved and not remove_tree(old) else None
 
 
+def _prefix(profile):
+    return ((profile.get("commit") or {}).get("message_prefix") or "") if isinstance(profile, dict) else ""
+
+
 def commit_message(profile, version: str) -> str:
     """MW-035: the install commit message: `<commit.message_prefix> mkway <version>: install`, no prefix when unset."""
-    prefix = ((profile.get("commit") or {}).get("message_prefix") or "") if isinstance(profile, dict) else ""
-    return (f"{prefix} " if prefix else "") + f"mkway {version}: install"
+    return core.commit_message(_prefix(profile), version)
 
 
-def commit_lines(profile, version: str) -> list:
-    """MW-027, MW-035: the ONE line the owner pastes in the task root (PowerShell and bash): add the committed settings
-    file and the bundle, then commit only those paths, so files staged by anyone else stay out of the commit."""
-    paths = f"{SETTINGS_FILE} {profiles.bundle_root(profile)}"
-    return [f'git add {paths}; git commit -m "{commit_message(profile, version)}" -- {paths}']
+def install_paths(root: Path, profile, profile_rel=None) -> list:
+    """MW-036: the paths install itself writes, relative to the root (the decision is `core_install.install_paths`)."""
+    bundle = profiles.bundle_root(profile)
+    present = {name for name in core.OWN_NAMES if (root / bundle / name).exists()}
+    return core.install_paths(bundle, present, profile_rel)
 
 
-def run_commit(root: Path, profile, version: str) -> str:
+def commit_lines(profile, version: str, paths: list, root: Path) -> list:
+    """MW-027, MW-035, MW-036, MW-041: the ONE line the owner pastes, from any folder (see `core_install.commit_line`)."""
+    return [core.commit_line(_prefix(profile), version, paths, Path(root).resolve().as_posix())]
+
+
+def run_commit(root: Path, profile, version: str, paths: list) -> str:
     """Run the line of `commit_lines` in the root (the owner's terminal only; the CLI tripwire guards it)."""
-    paths = [SETTINGS_FILE, profiles.bundle_root(profile)]
     add = subprocess.run(GIT + ["-C", str(root), "add", *paths], capture_output=True, text=True, timeout=120)
     if add.returncode != 0:
         raise InstallError("install is written, but `git add` failed: " + add.stderr.strip())
@@ -595,6 +447,45 @@ def run_commit(root: Path, profile, version: str) -> str:
     return f"commit: {message}"
 
 
+INSTALL_HINTS = {  # MW-112 (R284): the tool-validation ids say the correct form; the pure text of core_install stays as it is
+    "starter-invalid": ". Give install a --vcs of git or none: the starter profile is written from it",
+    "profile-invalid-shared": ". The owner fixes the profile in their own editor (`mkway check` names each error), then "
+                              "runs install with --shared again",
+    "shared-profile-invalid": ". Give --shared an absolute folder the schema accepts, or the owner fixes the profile in "
+                              "their own editor",
+    "commit-needs-git": ". Run install without --commit, or set vcs git in the profile in your own editor",
+    "source-empty": ". Install from the engine repository: `mkway install --from <engine repository>`",
+}
+
+
+def _decide(facts) -> None:
+    """Ask the core about the facts read so far; a refusal is an InstallError (one line, nothing written yet)."""
+    verdict = core.decide_install(facts)
+    if verdict.kind == core.REFUSE:
+        raise InstallError(verdict.text + INSTALL_HINTS.get(verdict.reason, ""))
+
+
+def _reader_agent(root: Path, copy: Path, python: str, bundle: str) -> list:
+    """MW-116 (R287c): write the reader agent file `.claude/agents/fresh-reader.md` from the template of the engine copy, unless
+    the file exists (a reinstall keeps the owner's edit). The report names the workspace trust dialog: Claude Code runs a
+    project agent's frontmatter hooks only after the dialog for the agent file's folder was accepted."""
+    template = copy / core.AGENT_TEMPLATE
+    if not template.is_file():
+        return [f"reader agent: the engine copy has no {core.AGENT_TEMPLATE}; no reader agent file was written"]
+    rendered = core.render_reader_agent(template.read_text(encoding="utf-8"), python, bundle)
+    path = root / core.AGENT_FILE
+    existing = path.read_text(encoding="utf-8") if path.is_file() else None
+    if core.reader_agent_action(existing, rendered) == "write":
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(rendered, encoding="utf-8")
+        said = f"reader agent: {core.AGENT_FILE} written"
+    else:
+        said = f"reader agent: {core.AGENT_FILE} exists and is kept"
+    return [said + "; its frontmatter hook runs only after the workspace trust dialog for this folder was accepted once "
+                   "(sub-agents.md, Hooks in subagent frontmatter): accept it, or the reader runs unguarded and "
+                   "`verdict-reader-unguarded` refuses its verdict"]
+
+
 def install(root: Path, src: Path, *, ref=None, profile_arg=None, vcs=None, python=None, shared=None,
             commit=False) -> list:
     root = Path(root).resolve()
@@ -602,65 +493,41 @@ def install(root: Path, src: Path, *, ref=None, profile_arg=None, vcs=None, pyth
     if shared is not None and schema_check._format_error("absolute-path", shared) is not None:
         raise InstallError("--shared must be an absolute path (for example C:/work/shared-state); nothing was written")
     ppath = paths.profile_path(root, profile_arg)
-    if not _inside(ppath, root):
-        raise InstallError("the profile path leads outside the root; nothing was written")
+    _decide(core.InstallFacts(shared=shared, profile_inside_root=_inside(ppath, root)))
     profile, errors = profiles.load(ppath)
-    starter = profile is None and errors == ["(profile): not found"]
-    set_shared = False  # MW-026: `--shared` writes `state.shared_dir` into a profile that is already there
-    if starter:
-        profile = starter_profile(vcs or detect_vcs(root))
-        if shared is not None:
-            profile["state"]["shared_dir"] = shared  # MW-026: the owner's opt-in
-        errors = profiles.validate(profile)
-        if errors:  # C53 (R64): an engine writer never writes a profile the schema refuses
-            raise InstallError("the starter profile would be invalid: " + "; ".join(errors[:5]) + "; nothing was "
-                               "written")
-    elif errors:
-        if shared is not None:
-            raise InstallError("the profile is invalid, so --shared cannot be written into it: " + "; ".join(errors[:5])
-                               + "; nothing was written")
-        report.append("profile: invalid, kept as it is: " + "; ".join(errors[:5]))
-    elif shared is not None and (profile.get("state") or {}).get("shared_dir") != shared:
-        profile = json.loads(json.dumps(profile))
-        profile.setdefault("state", {})["shared_dir"] = shared
-        errors = profiles.validate(profile)
-        if errors:  # C53 (R64): an engine writer never writes a profile the schema refuses
-            raise InstallError("the profile with --shared would be invalid: " + "; ".join(errors[:5]) + "; nothing "
-                               "was written")
-        set_shared = True
+    detected = detect_vcs(root) if vcs is None else None
+    plan = core.plan_profile(profile, errors, shared, vcs, detected)
+    candidate = profiles.validate(plan.profile) if plan.kind in ("starter", "shared") else None
+    _decide(core.InstallFacts(shared=shared, profile_inside_root=True, kind=plan.kind, load_errors=tuple(errors),
+                              candidate_errors=tuple(candidate) if candidate is not None else None))
+    starter, set_shared, profile = plan.kind == "starter", plan.kind == "shared", plan.profile
+    if plan.kind == "invalid":
+        report.append(core.profile_report(plan, errors, shared, ""))
     profile = profile if isinstance(profile, dict) else {}
-    vcs_now = profile.get("vcs") if profile.get("vcs") in ("git", "none") else (vcs or detect_vcs(root))
-    if commit and vcs_now != "git":
-        raise InstallError("--commit needs vcs git (the profile says none); nothing was written")
+    vcs_now = core.choose_vcs(profile, vcs, detected if detected is not None else detect_vcs(root))
+    _decide(core.InstallFacts(commit=commit, vcs_now=vcs_now))
     bundle = profiles.bundle_root(profile)
     bdir = root / bundle
     copy = bdir / "engine"
     state = profiles.state_dir(root, profile)
     first_install = not state.exists()  # MW-012: shadow by default, only on a first install
     copy_is_link = copy.is_symlink() or (copy.exists() and not _inside(copy, root))
-    if not _inside(bdir, root) or not _inside(state, root) or copy_is_link:
-        raise InstallError(f"{bundle} leads outside the root (a link or a junction); nothing was written")
+    _decide(core.InstallFacts(bundle=bundle, bundle_inside_root=not (
+        not _inside(bdir, root) or not _inside(state, root) or copy_is_link)))
     used = python or (profile.get("python") or {}).get("command") or "python"
-    if not plain_interpreter(used):
-        raise InstallError("--python must name an existing Python 3.9 or later: a name found on PATH or a path "
-                           "(quoted if it holds a space), no shell characters, and a version flag like -3 only "
-                           "after the py launcher; nothing was written")
+    _decide(core.InstallFacts(python_ok=plain_interpreter(used)))
     files, version, sha = source_files(Path(src), ref)
-    if not files:
-        raise InstallError("the source holds none of the engine's files")
+    _decide(core.InstallFacts(source_files=len(files)))
     if starter or set_shared:
         ppath.parent.mkdir(parents=True, exist_ok=True)
         tmp = ppath.with_name(ppath.name + ".tmp")  # a temp file, then replace: never a half-written profile
         tmp.write_text(json.dumps(profile, indent=2) + "\n", encoding="utf-8")
         os.replace(tmp, ppath)
-        report.append(f"profile: starter written ({ppath.relative_to(root).as_posix()})" if starter else
-                      f"profile: state.shared_dir set to {shared} ({ppath.relative_to(root).as_posix()})")
-    if copy.exists() and not (bdir / "mkway.lock").is_file():  # checked above: inside the root, and no link
-        raise InstallError(f"{bundle}/engine exists and has no mkway.lock beside it; it was not changed")
+        report.append(core.profile_report(plan, errors, shared, ppath.relative_to(root).as_posix()))
+    _decide(core.InstallFacts(bundle=bundle, copy_exists=copy.exists(), lock_exists=(bdir / "mkway.lock").is_file()))
     leftover = _replace_copy(bdir, copy, files, bundle)  # MW-032: build beside, swap by rename, never half-deleted
-    semver = files.get("VERSION", b"").decode("utf-8", "replace").strip() or None  # MW-016: beside the pinned sha
-    lock = {"version": version, "semver": semver, "source_sha": sha, "date": datetime.date.today().isoformat(),
-            "hash": copy_hash(copy)}
+    lock = core.lock_record(files, version, sha, datetime.date.today().isoformat())  # MW-051: no second read
+    semver = lock["semver"]
     (bdir / "mkway.lock").write_text(json.dumps(lock, indent=2) + "\n", encoding="utf-8")
     report.append(f"copy: {len(files)} files, version {version}, {lock['hash'][:19]}")
     if leftover is not None:
@@ -672,16 +539,12 @@ def install(root: Path, src: Path, *, ref=None, profile_arg=None, vcs=None, pyth
     # R19c: the register keeps its `\n` line ends on a clone with autocrlf; MW-027: so does the engine copy
     _ensure_lines(bdir / ".gitattributes", ATTRIBUTES_HEAD, [REGISTER_ATTRIBUTE, ENGINE_ATTRIBUTE])
     report += _seal(root, profile, vcs_now)
-    _ensure_lines(bdir / ".gitignore", IGNORE_HEAD, [f"{name}/" for name in IGNORED_FOLDERS] + list(RUNTIME_IGNORES))
-    have = (bdir / ".gitignore").read_text(encoding="utf-8").splitlines()
-    old = [f"{name}/" for name in ("cards", "ledger") if f"{name}/" in have]
-    if old:  # fix check 3 L7: an earlier install's lines; removing them is the upgrade card's (C36)
-        report.append(f"ignore: {bundle}/.gitignore still ignores {', '.join(old)} from an earlier install; "
-                      "remove those lines: cards and ledger are tracked (R18)")
-    if "engine/" in have:  # MW-035: the copy is tracked now; only that exact line of an earlier install goes
-        kept = [line for line in (bdir / ".gitignore").read_text(encoding="utf-8").splitlines() if line != "engine/"]
-        (bdir / ".gitignore").write_text("\n".join(kept) + "\n", encoding="utf-8")
-        report.append("ignore: removed engine/ (from an earlier install)")
+    ignore = bdir / ".gitignore"
+    raw = _read_text_raw(ignore)
+    text, lines = core.ignore_plan(raw, bundle)
+    if text != raw:
+        _write_text_raw(ignore, text)
+    report += lines
     copied = json.loads((copy / "engine" / "manifest.json").read_text(encoding="utf-8"))
     manifest = copied["entries"]
     default = paths.profile_path(root)
@@ -690,6 +553,7 @@ def install(root: Path, src: Path, *, ref=None, profile_arg=None, vcs=None, pyth
     entries = generate_entries(profile, manifest, profile_rel=rel, python=committed_python,  # carry a machine's own
                                groups_table=copied.get("groups", {}))                       # interpreter
     write_settings(root / SETTINGS_FILE, entries, bundle)
+    report += _reader_agent(root, copy, committed_python, bundle)
     local = root / LOCAL_SETTINGS_FILE
     if live_entries(local, bundle):  # MW-027: an older install put the entries here; they would run twice otherwise
         write_settings(local, [], bundle)
@@ -707,11 +571,14 @@ def install(root: Path, src: Path, *, ref=None, profile_arg=None, vcs=None, pyth
                           "`mkway gate on <name>` turns one to blocking")
     if vcs_now == "git":
         version_text = semver or version
+        own = install_paths(root, profile, ppath.relative_to(root).as_posix() if starter else None)
+        if (root / core.AGENT_FILE).is_file():
+            own = own + [core.AGENT_FILE]  # MW-116
         if commit:
-            report.append(run_commit(root, profile, version_text))
+            report.append(run_commit(root, profile, version_text, own))
         else:
             report.append("commit: paste this one line in the task folder (or run install again with --commit):")
-            report += commit_lines(profile, version_text)
+            report += commit_lines(profile, version_text, own, root)
     return report
 
 
@@ -760,25 +627,21 @@ def git_builtins_line(root: Path, run=None, extra=frozenset()) -> str:
 
 def version_tag_line(root: Path, env=None):
     """MW-016: the `mkway check` line that compares the root's `VERSION` file with the git tag at HEAD (`v<version>`).
-    A warning, never a failure; it only reads tags, the owner makes them. None when the root has no `VERSION` file."""
+    The shell reads the file and the tags; `core_install.version_tag_line` words the line. None when the root has no
+    `VERSION` file."""
     import runner
     path = Path(root) / "VERSION"
     if not path.is_file():
         return None
-    if "CLAUDECODE" in (os.environ if env is None else env):  # the owner's terminal only, as for the git builtins
-        return "version tag: not compared inside a Claude chat (run `mkway check` in your own terminal)"
-    want = "v" + path.read_text(encoding="utf-8").strip()
-    try:
-        proc = runner.git(root, "tag", "--points-at", "HEAD")
-    except (OSError, subprocess.SubprocessError):
-        return "version tag: not compared (git did not answer)"
-    tags = proc.stdout.split() if proc.returncode == 0 else []
-    if want in tags:
-        return f"version tag: {want} at HEAD matches VERSION"
-    if tags:
-        return (f"version tag: warning: HEAD is tagged {', '.join(sorted(tags))}, which differs from VERSION "
-                f"({want}); the owner tags the release")
-    return f"version tag: warning: the tag {want} is missing at HEAD; the owner tags the release (check never writes one)"
+    in_chat = "CLAUDECODE" in (os.environ if env is None else env)  # the owner's terminal only, as for the builtins
+    tags = []
+    if not in_chat:
+        try:
+            proc = runner.git(root, "tag", "--points-at", "HEAD")
+            tags = proc.stdout.split() if proc.returncode == 0 else []
+        except (OSError, subprocess.SubprocessError):
+            tags = None
+    return core.version_tag_line(path.read_text(encoding="utf-8"), in_chat, tags)
 
 
 def _copy_manifest(copy: Path):
@@ -804,24 +667,6 @@ def message_gate_line(root: Path, profile, manifest=None):
         return "message gate: the SendMessage hook entry is present"
     return ("message gate: warning: .claude/settings.json has no SendMessage hook entry, so messages are not "
             "checked against the inbox (fix: the owner runs `mkway install`)")
-
-
-FAILED_NAMES_MAX = 10  # MW-025: the check line names at most this many failing tests
-
-
-def failed_names(output: str) -> str:
-    """MW-025: `; failed: <node>, ...` for the `FAILED`/`ERROR` rows of pytest's short summary: up to ten names, then
-    `and N more`; empty when the output has none (a crash before collection)."""
-    names = []
-    for m in re.finditer(r"^(?:FAILED|ERROR) (\S+)", output or "", re.M):
-        if m.group(1) not in names:
-            names.append(m.group(1))
-    if not names:
-        return ""
-    text = "; failed: " + ", ".join(names[:FAILED_NAMES_MAX])
-    if len(names) > FAILED_NAMES_MAX:
-        text += f" and {len(names) - FAILED_NAMES_MAX} more"
-    return text
 
 
 def no_install_line(root) -> str:
@@ -850,6 +695,19 @@ def state_outside_root_lines(root: Path, profile) -> list:
             "anything)"]
 
 
+def staged_outside_lines(root: Path, profile) -> list:
+    """MW-043: `staged files: N outside every open card's Paths` for a git root with N > 0 staged files outside the
+    Paths of every open card; no line otherwise, and none when git or the register cannot be read."""
+    if profiles.vcs(profile) != "git":
+        return []
+    import gate_commit
+    try:
+        found = gate_commit.staged_outside(root, profile)
+    except Exception:
+        return []
+    return [f"staged files: {len(found)} outside every open card's Paths"] if found else []
+
+
 def check(root: Path, *, profile_arg=None, env=None) -> tuple:
     """(exit code, lines)."""
     env = dict(os.environ if env is None else env)
@@ -865,18 +723,18 @@ def check(root: Path, *, profile_arg=None, env=None) -> tuple:
         lines.append("profile: invalid: " + "; ".join(errors[:5]) + " (fix: the owner edits the profile in their "
                      "own editor)")
         ok = False
+    bad_watch = profiles.session_id_watch_unreadable(profile)  # MW-110, R279c Q2
+    if bad_watch:
+        lines.append(f"profile: messaging.session_id_watch_until is {bad_watch!r}, not a date (YYYY-MM-DD): it counts as "
+                     f"passed (fix: the owner sets a date or empties it in their own editor)")
+        ok = False
     try:
         lock = json.loads((bdir / "mkway.lock").read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         lock = None
-    if lock is None:
-        lines.append("copy hash: no lock (fix: mkway install)")
-        ok = False
-    elif lock.get("hash") == copy_hash(copy):
-        lines.append("copy hash: matches the lock")
-    else:
-        lines.append("copy hash: differs from the lock (fix: mkway install)")
-        ok = False
+    line, hash_ok = core.hash_line(lock, copy_hash(copy) if lock is not None else None)
+    lines.append(line)
+    ok = ok and hash_ok
     if profiles.vcs(profile) == "git":  # close-fix 8 (R90): the static built-in list against git's own
         if "CLAUDECODE" in env:  # the owner's terminal only (R90)
             lines.append("git builtins: not compared inside a Claude chat (run `mkway check` in your own terminal)")
@@ -894,6 +752,7 @@ def check(root: Path, *, profile_arg=None, env=None) -> tuple:
     except (OSError, ValueError, ImportError):
         pass
     lines += state_outside_root_lines(root, profile)  # MW-026: a warning, never a failure
+    lines += staged_outside_lines(root, profile)  # MW-043: a line, never a failure
     ini =profiles.state_dir(root, profile) / "check" / "pytest.ini"
     ini.parent.mkdir(parents=True, exist_ok=True)
     ini.write_text("[pytest]\nmarkers =\n    engine_repo: needs the engine repository itself\n", encoding="utf-8")
@@ -904,13 +763,9 @@ def check(root: Path, *, profile_arg=None, env=None) -> tuple:
                            "-p", "no:cacheprovider", "--basetemp", str(scratch), "-m", "not engine_repo",
                            str(copy / "tests")], cwd=str(copy), capture_output=True, text=True, env=run_env,
                           timeout=900)
-    summary = (proc.stdout.strip().splitlines() or ["no output"])[-1]
-    if proc.returncode == 0:
-        passed = re.search(r"(\d+) passed", summary)
-        lines.append(f"tests: {passed.group(1) if passed else 0} passed")
-    else:
-        lines.append(f"tests: not green ({summary})" + failed_names(proc.stdout))
-        ok = False
+    line, tests_ok = core.tests_line(proc.returncode, proc.stdout)
+    lines.append(line)
+    ok = ok and tests_ok
     if env.get("ENGINE_TERMS_FILE"):
         scan = _load_term_scan(copy)
         try:

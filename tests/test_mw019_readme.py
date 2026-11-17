@@ -10,6 +10,14 @@ from _engine import REPO
 README = REPO / "README.md"
 HEADING = "## Outbox check: a text leaves only after a fresh reader"
 REASONS = ("check-sha-mismatch", "check-record-failed", "outbox-changed-after-check", "close-unchecked-outbox")
+OUTBOX_NEEDLES = ("verdict-not-enforced",) + REASONS + (
+    "outbox.dir", "outbox.checkers", "outbox.id_patterns_file", "valid", "stale", "unproven", "missing",
+    "sha256: <the document's sha256>", "numbers: N checked, 0 contradictions",
+    "claims: N checked, 0 overstated, 0 without basis", "patterns: clean", "links: clean",
+    "checker: <agent type>", ".check.md", "mkway outbox", "card close", "outbox_checks.jsonl", "agents.jsonl",
+    "outbox: N files, M unchecked")
+BYPASS_PHRASES = ("edited after the check", "copied from another file", "not on the list", "no agent row",
+                  "says clean", "older version", "ships no pattern", "class `form`", "watch")
 
 pytestmark = pytest.mark.engine_repo  # the README is not in an engine copy: `mkway check` leaves these out
 
@@ -22,38 +30,27 @@ def _section():
     return " ".join((rest[:nxt.start()] if nxt else rest).split())
 
 
+def _needle_id(text):
+    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+
+
 def test_one_section_with_a_body():
-    """E17: one heading `## Outbox check: a text leaves only after a fresh reader`, with a body. Catches: a missing or
-    doubled section."""
+    """Catches: a missing or doubled section (E17)."""
     assert README.read_text(encoding="utf-8").count("\n" + HEADING + "\n") == 1
     assert len(_section()) > 1200
 
 
-def test_the_section_names_every_reason_key_state_and_command():
-    """E17: every reason id of the three outbox entries and of the close, the three profile keys, the four states, the
-    five check lines, the record file, the two commands that matter (`mkway outbox`, `card close`) and the suffix are in
-    the text. Catches: a refusal a session will meet that the README does not explain."""
-    flat = _section()
+@pytest.mark.parametrize("needle", [pytest.param(n, id=_needle_id(n)) for n in OUTBOX_NEEDLES])
+def test_the_section_names_every_reason_key_state_and_command(needle):
+    """Checks: the section names every refusal reason, state and command of the outbox check (E17)."""
     manifest = json.loads((REPO / "engine" / "manifest.json").read_text(encoding="utf-8"))["entries"]
     declared = {r for e in manifest if e["name"].startswith("outbox_check.") for r in e["reason_ids"]}
-    assert declared == {"check-sha-mismatch", "check-record-failed", "outbox-changed-after-check"}
-    for reason in REASONS:
-        assert f"`{reason}`" in flat, reason
-    for key in ("outbox.dir", "outbox.checkers", "outbox.id_patterns_file"):
-        assert f"`{key}`" in flat, key
-    for word in ("`valid`", "`stale`", "`unproven`", "`missing`", "`sha256: <the document's sha256>`",
-                 "`numbers: N checked, 0 contradictions`", "`claims: N checked, 0 overstated, 0 without basis`",
-                 "`patterns: clean`", "`links: clean`", "`checker: <agent type>`", "`.check.md`", "`mkway outbox`",
-                 "`card close`", "`outbox_checks.jsonl`", "`agents.jsonl`", "`outbox: N files, M unchecked`"):
-        assert word in flat, word
+    assert declared == {"check-sha-mismatch", "check-record-failed", "outbox-changed-after-check",
+                        "verdict-not-enforced", "verdict-file-by-command"}  # MW-068 (R179), MW-080 (R196)
+    assert f"`{needle}`" in _section()
 
 
-def test_the_section_names_the_bypass_set():
-    """E17: the section says which tries stay refused or unproven: the document edited after the check, a check copied
-    from another file, a checker type not on the list, no agent row, a pattern present while the line says clean, the
-    sha line of an older version; and that the engine ships no pattern and the class of the write gate is form.
-    Catches: a rule whose edges the reader must find in the code."""
-    flat = _section().lower()
-    for phrase in ("edited after the check", "copied from another file", "not on the list", "no agent row",
-                   "says clean", "older version", "ships no pattern", "class `form`", "watch"):
-        assert phrase in flat, phrase
+@pytest.mark.parametrize("phrase", [pytest.param(p, id=_needle_id(p)) for p in BYPASS_PHRASES])
+def test_the_section_names_the_bypass_set(phrase):
+    """Checks: the section names the bypass set of the rule in plain words (E17)."""
+    assert phrase in _section().lower()

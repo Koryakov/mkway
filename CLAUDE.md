@@ -19,7 +19,8 @@ installs and tunes through its own branch profile. It is English only and holds 
 - To read code of another repository, use only a read form at a pinned commit (`git --no-optional-locks ... show
   <sha>:<path>`). Never import, exec or run a file of another repository, and never copy a file or a block of its
   code here. Copying a single JSON value is allowed; copying a whole config file is not.
-- Install nothing (`pip` is denied). Standard library and the installed pytest only.
+- Install nothing yourself (`pip` is denied). Standard library, the installed pytest, and the packages pinned in
+  `tools/requirements-test.txt`, which the owner installs (owner, 12.11: «yes if it safe»).
 
 ## No task data (NDA)
 - No customer, colleague, product, database or host names; no addresses; no ids of another task's process (card ids,
@@ -39,7 +40,10 @@ installs and tunes through its own branch profile. It is English only and holds 
   makes it green, and the card Log names both commits.
 - Never weaken a test to make it pass. If a Test cases row is wrong, change the row with a Log line saying why, then
   the test.
-- Before every commit run the whole suite, the term scan included: `python -m pytest`. This is the engine's CI; there
+- Before every commit run the whole suite, the term scan included: `python -m pytest -n auto --dist loadgroup` when
+  `tools/requirements-test.txt` is installed, else `python -m pytest`; the merge runs the parallel command (the
+  commit-tier card, R198, changes this line again later). The worker count is set only by `MKWAY_TEST_WORKERS` (default
+  half the logical cores); `PYTEST_XDIST_AUTO_NUM_WORKERS` is ignored (R203). This is the engine's CI; there
   is no CI server and no remote. Write the result in the card Log. A commit message names the Test cases rows it
   covers.
 - A value that is unclear is marked «not established». Never guess a value.

@@ -22,6 +22,11 @@ import profiles
 LEDGER_DIR = "ledger"
 LEDGER_FILE = "ledger.md"
 IN_FORCE = "in force"
+SUPERSEDED = "superseded"
+
+
+class UnknownRow(Exception):
+    """`replaces` names an id that is not in the ledger (MW-050)."""
 DEFAULT_ID = r"D-\d+"
 _UNESCAPED_PIPE = re.compile(r"(?<!\\)\|")
 _LITERAL_STOP = re.compile(r"[\\\[\](){}.+*?|$^]")
@@ -79,6 +84,10 @@ def parse(text: str) -> list:
             cells = _split_row(lines[n])
             out.append((n + 1, {col: (cells[header.index(col)] if col in header and header.index(col) < len(cells)
                                       else "") for col in columns}))
+    replaced = {row["replaces"] for _n, row in out if row["replaces"]}  # MW-050: append-only supersede
+    for _n, row in out:
+        if row["id"] in replaced and not is_closed(row["status"]):
+            row["status"] = SUPERSEDED
     return out
 
 
@@ -155,7 +164,7 @@ def _cell(value) -> str:
 
 
 def add(root, profile, *, card: str, topic: str, quote: str, source: str, status: str = IN_FORCE,
-        today: Optional[str] = None, by: Optional[str] = None) -> dict:
+        today: Optional[str] = None, by: Optional[str] = None, replaces: str = "") -> dict:
     """Append one row to the ledger file (created, with its heading and header, when missing): today's date, the next
     id, `by` (MW-015; with none, `owner_who`). The row is returned. A row goes at the end of its table; text after the
     table stays."""
@@ -166,9 +175,11 @@ def add(root, profile, *, card: str, topic: str, quote: str, source: str, status
     lines = text.splitlines()
     tables = list(_tables(lines))
     ids = [row["id"] for _n, row in parse(text)]
+    if replaces and replaces not in ids:
+        raise UnknownRow(replaces)
     row = {"id": next_id(ids, _pattern(profile)),
            "date": today or datetime.date.today().isoformat(), "card": card, "topic": topic, "quote": quote,
-           "by": by or fmt["owner_who"], "source": source, "asked": "", "replaces": "", "status": status, "note": ""}
+           "by": by or fmt["owner_who"], "source": source, "asked": "", "replaces": replaces, "status": status, "note": ""}
     line = "| " + " | ".join(_cell(row[c]) for c in columns) + " |"
     target.parent.mkdir(parents=True, exist_ok=True)
     if not tables:

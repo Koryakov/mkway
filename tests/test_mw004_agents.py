@@ -55,20 +55,18 @@ def iso(**delta):
 
 
 def test_start_row_is_appended(tmp_path, clock):
-    """E1: a `SubagentStart` appends one line with the session, the agent id and type and the start time.
-    Catches: no gate on the event, a row without the session, or a start time taken at the end."""
+    """Catches: no gate on the event, a row without the session, or a start time taken at the end (E1)."""
     root = task_root(tmp_path)
     clock.after(minutes=3)
     res = _start(root)
-    assert res.exit_code == 0 and res.stdout == ""
+    assert res.exit_code == 0
+    assert res.stdout == ""
     assert _agents(root) == [{"kind": "start", "session_id": "s1", "agent_id": "a1", "agent_type": "worker",
                               "started": iso(minutes=3)}]
 
 
 def test_stop_row_carries_the_result_and_the_times(tmp_path, clock):
-    """E2: a `SubagentStop` appends an end row: the start time of that agent's start row, the end time, the elapsed
-    seconds between them, and `last_assistant_message` in full (newlines and all), `result_source: payload`.
-    Catches: a cut or trimmed result, an elapsed time that is not end minus start, a start time of the stop."""
+    """Catches: a cut or trimmed result, an elapsed time that is not end minus start, or a start time taken from the stop (E2)."""
     root = task_root(tmp_path)
     clock.after(minutes=0)
     _start(root)
@@ -87,9 +85,7 @@ def _transcript(path, records):
 
 
 def test_result_comes_from_the_agent_transcript_when_the_payload_has_none(tmp_path, clock):
-    """E3: with no `last_assistant_message`, the result is the text of the LAST assistant message of the file
-    `agent_transcript_path` names (its text blocks joined, a tool call skipped), `result_source: transcript`.
-    Catches: the first assistant message, a tool call's input read as the result, a transcript that is not read."""
+    """Catches: the first assistant message, a tool call's input read as the result, or a transcript that is not read (E3)."""
     root = task_root(tmp_path)
     log = tmp_path / "agent-a1.jsonl"
     _transcript(log, [
@@ -111,9 +107,7 @@ def test_result_comes_from_the_agent_transcript_when_the_payload_has_none(tmp_pa
 
 
 def test_no_result_is_not_established(tmp_path, clock):
-    """E4: no message in the payload, no transcript path (or a file that is missing): the row is still written with
-    the result «not established» and `result_source: none`. Catches: a stop that writes no row when it has no text,
-    or an empty string standing for a missing result."""
+    """Catches: a stop that writes no row when it has no text, or an empty string standing for a missing result (E4)."""
     root = task_root(tmp_path)
     _start(root, agent="a1")
     _start(root, agent="a2")
@@ -126,9 +120,7 @@ def test_no_result_is_not_established(tmp_path, clock):
 
 
 def test_stop_without_a_start_row_has_no_times(tmp_path, clock):
-    """E5: a stop whose start was never recorded (the hook was installed mid-run): `started` and `elapsed_seconds`
-    are «not established»; `ended` is the stop time. Catches: a guessed start (the session's first row, the stop
-    time) or an elapsed time of zero."""
+    """Catches: a guessed start (the session's first row, the stop time) or an elapsed time of zero (E5)."""
     root = task_root(tmp_path)
     clock.after(minutes=5)
     _stop(root, last_assistant_message="done")
@@ -138,9 +130,7 @@ def test_stop_without_a_start_row_has_no_times(tmp_path, clock):
 
 
 def test_a_stop_pairs_with_its_own_start(tmp_path, clock):
-    """E6: the same agent id in another session, and another agent id in the same session, are not this agent's
-    start. The stop of (s1, a1) takes the start row of (s1, a1) only. Catches: a pairing by agent id alone or by
-    session alone, or by the last start row."""
+    """Catches: a pairing by agent id alone or by session alone, or by the last start row (E6)."""
     root = task_root(tmp_path)
     _start(root, agent="a1", session="s1")
     clock.after(minutes=10)
@@ -155,22 +145,23 @@ def test_a_stop_pairs_with_its_own_start(tmp_path, clock):
     assert (ends[("s2", "a1")]["started"], ends[("s2", "a1")]["elapsed_seconds"]) == (iso(minutes=10), 900.0)
 
 
-def test_a_failed_record_never_blocks_and_adds_no_context(tmp_path, clock):
-    """E7: when `agents.jsonl` cannot be written, the run exits 0 with nothing on stdout (an `additionalContext` on
-    `SubagentStop` would keep the agent going), and a `warn` row `agent-record-failed` is in the refusal log.
-    Catches: a refuse, an exit 2, or a warn rendered as context."""
+@pytest.mark.parametrize("fire, event", [
+    pytest.param(lambda root: _start(root), "SubagentStart", id="start"),
+    pytest.param(lambda root: _stop(root, last_assistant_message="r"), "SubagentStop", id="stop"),
+])
+def test_a_failed_record_never_blocks_and_adds_no_context(tmp_path, clock, fire, event):
+    """Catches: a start that goes on unrecorded, a stop that is refused (it keeps a finished agent going), or a message that does not name agents.jsonl, when it cannot be written (E7, R271c-D1)."""
     root = task_root(tmp_path)
     (root / "mkway" / "state" / "agents.jsonl").mkdir()  # a folder where the file should be: every append fails
-    for res in (_start(root), _stop(root, last_assistant_message="r")):
-        assert res.exit_code == 0 and res.stdout == "" and res.stderr == ""
+    res = fire(root)
+    kind = "refuse" if event == "SubagentStart" else "warn"
+    assert (res.exit_code, "agents.jsonl" in res.stdout + res.stderr) == ((2 if event == "SubagentStart" else 0), True)
     rows = jsonl(root / "mkway" / "state" / "refusals.jsonl")
-    assert [(r["reason_id"], r["kind"], r["event"]) for r in rows] == [
-        ("agent-record-failed", "warn", "SubagentStart"), ("agent-record-failed", "warn", "SubagentStop")]
+    assert [(r["reason_id"], r["kind"], r["event"]) for r in rows] == [("agent-record-failed", kind, event)]
 
 
 def test_a_payload_without_an_agent_id_is_still_recorded(tmp_path, clock):
-    """E8: a payload with no `agent_id` and no `agent_type` still gets its row, both «not established». Catches: a
-    gate that skips an unreadable payload, so the result is lost."""
+    """Catches: a gate that skips an unreadable payload, so the result is lost (E8)."""
     root = task_root(tmp_path)
     _fire(root, "SubagentStop", last_assistant_message="r")
     (end,) = _agents(root)
@@ -178,9 +169,7 @@ def test_a_payload_without_an_agent_id_is_still_recorded(tmp_path, clock):
 
 
 def test_the_dispatcher_records_both_events(tmp_path, clock):
-    """E9: through the dispatcher with the engine's own manifest: both events write their rows, exit 0, empty
-    stdout; turning the gate off in the profile (`gates.agents.on: false`) writes none. Catches: a gate wired to
-    one event only, or a switch that does nothing."""
+    """Checks: through the dispatcher both events write their rows, and turning the gate off in the profile writes none (E9)."""
     root = task_root(tmp_path)
     assert _start(root).exit_code == 0
     clock.after(minutes=2)

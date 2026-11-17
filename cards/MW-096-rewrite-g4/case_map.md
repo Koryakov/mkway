@@ -1,0 +1,8 @@
+# case_map of MW-096
+# literal: tests/test_mw005_keys.py::test_test_roots_env_and_command_defaults_and_overrides '/abs' - S6: the absolute literal is replaced by two absolute forms built from tmp_path, the drive form str(tmp_path) and the leading-slash form, the two branches of the relative-path refusal (answer of retro-oper10 to the STOP, option b)
+# literal: tests/test_register.py::test_register_row_points_to_card_folder <asserts> - S1: the per-row loop became one list of bad rows, 3 asserts instead of 6; the four row checks are in _row_points_to_its_folder (R227a)
+# literal: tests/test_register.py::test_card_has_template_sections <asserts> - S1: the per-card loop became one mismatch list, 7 asserts instead of 8; the shape compare is the same tuple (R227a)
+# literal: tests/test_defaults.py::test_every_default_key_is_placed_once <asserts> - S1: loops became parametrize over KEYS (36 cases, not 32), 5 asserts in each case; the literal tool cannot count the two-loop comprehension
+# literal: tests/test_mw025_copy_check.py::test_the_eight_tests_that_read_engine_repository_files_are_marked "the four real file names", "::", " is not marked" - S5 on real names: the real file names are replaced by a name search over the top of tests/ (glob), same five names, found and marked; a name in two files must be marked in both (accepted at 5ebafe7 and 9bdc4ed)
+# literal: tests/test_defaults.py::test_defaults_read_at_pin_have_map_types <soft-access> - the presence assert before the type assert closes the missing-key hole (blind W1)
+# literal: tests/shell/test_session_facts.py::<module> "module" and "mail" - setup, not a check: the mail fixture scope and its tmp_path_factory.mktemp name; the fixture builds under tmp_path per test (accepted at 6405e74 and ad35a00)

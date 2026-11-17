@@ -34,18 +34,18 @@ def task(tmp_path):
 
 
 def test_reopen_from_waiting_never_writes_paths_with_the_signal_stripped(task):
-    """H1 route (a) (close check; R54): the holder strips `CLAUDECODE` and runs `card set <id> open` from `waiting`;
-    the card reopens but its recorded Paths stay the ones the first open recorded. Catches: a record decision that
-    reads the caller's environment."""
+    """Checks: a reopen from waiting keeps the Paths the first open recorded, whatever the caller's environment says. H1 route a, R54"""
+    # the holder strips CLAUDECODE and runs card set id open from waiting; the card reopens but its recorded Paths stay
+    # the ones the first open recorded.
     assert cli(task, "card", "set", "CARD-001", "open")[0] == 0  # no session signal: looks like the owner
     assert _row(task, "CARD-001")["status"] == "open"
     assert _row(task, "CARD-001")["paths"] == "src/a.py"
 
 
 def test_reopen_from_waiting_never_writes_paths_with_a_chosen_profile(task, tmp_path):
-    """H1 route (b) (close check; R54): the holder keeps the signal and passes `--profile` naming a copy of the
-    profile with `cards.owner_moves: []`; the reopen still writes no Paths, and neither does the owner's `card open`
-    from `waiting`. Catches: a record decision that reads a caller-chosen profile."""
+    """Checks: a reopen from waiting keeps the Paths the first open recorded, whatever profile the caller names. H1 route b, R54"""
+    # the holder keeps the signal and passes --profile naming a copy of the profile with cards.owner_moves: []; the reopen
+    # still writes no Paths, and neither does the owner's card open from waiting.
     evil = tmp_path / "evil.json"
     evil.write_text(json.dumps(dict(_profile(task), cards={"owner_moves": []})), encoding="utf-8")
     assert cli(task, "card", "set", "CARD-001", "open", "--profile", str(evil), session=True)[0] == 0
@@ -81,10 +81,10 @@ DENY = [
 
 @pytest.mark.parametrize("tool,command", DENY)
 def test_engine_call_not_in_exact_form_is_refused(task, tool, command):
-    """H4 (close check; R54): a command that holds an engine call passes only as the one plain call, optionally after
-    `cd <path inside the bundle root> &&`: no other segment, pipe, redirect, `VAR=` prefix or wrapper; no `$`,
-    backtick, `{`, `[`, `(`, `*` or `?` in the call; no `--profile` or `--root`. Catches: an owner-only command
-    spelled so the gate reads another word than the shell runs, or a call that strips the session signal first."""
+    """Catches: an owner-only command spelled so the gate reads another word than the shell runs, or a call that strips the session signal first. H4, R54"""
+    # a command that holds an engine call passes only as the one plain call, optionally after cd <path inside the bundle
+    # root> &&: no other segment, pipe, redirect, VAR= prefix or wrapper; no $, backtick, {, [, (, * or ? in the call; no
+    # --profile or --root.
     assert _shell(task, command, tool=tool) == "engine-call-not-plain", command
 
 
@@ -95,8 +95,8 @@ def test_engine_call_not_in_exact_form_is_refused(task, tool, command):
     ("PowerShell", f"{P} card list"),
 ])
 def test_engine_call_in_exact_form_passes(task, tool, command):
-    """H4 allow side (R55 E1): the plain call, the `cd <bundle root> &&` form and a quoted whole-word argument that
-    holds a space pass. Catches: an exact-form rule that over-refuses the parser's plain quote pair."""
+    """Checks: the plain call, the cd bundle root form and a quoted whole-word argument holding a space pass. H4 allow side, R55 E1"""
+    # the exact-form rule must not over-refuse the parser's plain quote pair.
     assert _shell(task, command, tool=tool) == "allow", command
 
 
@@ -122,19 +122,19 @@ FOLDER_DENY = [
 
 @pytest.mark.parametrize("tool,command,reason", FOLDER_DENY)
 def test_writes_follow_folder_changes_and_aliases(task, tool, command, reason):
-    """H5 (close check; R54): `shell_writes` follows `cd`, `pushd`, `Set-Location`, `Push-Location` and `git -C`;
-    a folder change to a target it cannot read makes a relative write `everywhere`; the PowerShell aliases `mi`,
-    `cpi` and the parameter prefixes `-Pa`, `-LP`, `-Path:` are read. Catches: a forged lock file or seal written
-    after a folder change, or through an alias, that the gate reads as a harmless relative path."""
+    """Catches: a forged lock file or seal written after a folder change, or through an alias, that the gate reads as a harmless relative path. H5, R54"""
+    # shell_writes follows cd, pushd, Set-Location, Push-Location and git -C; a folder change to a target it cannot read
+    # makes a relative write everywhere; the PowerShell aliases mi, cpi and the parameter prefixes -Pa, -LP, -Path: are read.
     assert _shell(task, command, tool=tool) == reason, command
 
 
 def test_forged_lock_after_cd_leaves_the_engine_closed(task):
-    """H5 (close check): the forged `locks/engine.json` written after `cd mkway/locks` is refused, so an Edit of the
-    engine's own code stays refused. Catches: a session that opens a lock for itself through a folder change."""
+    """Catches: a session that opens a lock for itself through a folder change. H5"""
+    # the forged locks/engine.json written after cd mkway/locks is refused, so an Edit of the engine's own code stays refused.
     assert _shell(task, f"cd mkway/locks && echo '{FORGED_LOCK}' > engine.json") == "lock-file-by-session"
     v = gate_call(gate_lock.check, task, tool="Edit", tool_input={"file_path": "mkway/engine/gate_lock.py"})
-    assert v.kind == "refuse" and v.reason_id == "lock-closed-edit"
+    assert v.kind == "refuse"
+    assert v.reason_id == "lock-closed-edit"
 
 
 @pytest.mark.parametrize("tool,command", [
@@ -144,26 +144,30 @@ def test_forged_lock_after_cd_leaves_the_engine_closed(task):
     ("PowerShell", "Push-Location src; 'x' > a.txt; Pop-Location"),
 ])
 def test_folder_changes_that_reach_no_target_pass(task, tool, command):
-    """H5 allow side: a subshell's `cd` ends with the subshell, and a folder change that reaches no lock target
-    passes. Catches: a folder rule that refuses every `cd`."""
+    """Checks: a folder change that reaches no lock target passes, and a subshell cd ends with the subshell. H5 allow side"""
+    # the catch this allow side guards is a folder rule that refuses every cd.
     assert _shell(task, command, tool=tool) == "allow", command
 
 
-def test_payload_cwd_is_the_start_folder(task):
-    """Item 15 (R58 d; hooks reference: `cwd` is a common input field): the gate starts the folder tracking from the
-    hook input's `cwd`, so `cd mkway/locks` in one call and `echo x > engine.json` in the next is refused. A `cwd`
-    that is missing or outside the root makes a relative write `everywhere`. Catches: a gate that takes the root as
-    the folder of every command."""
+@pytest.mark.parametrize("make_cwd", [
+    pytest.param(lambda task: None, id="no-cwd"),
+    pytest.param(lambda task: str(task.parent / "elsewhere"), id="outside-root"),
+])
+def test_payload_cwd_is_the_start_folder(task, make_cwd):
+    """Catches: a gate that takes the root as the folder of every command. Item 15, R58 d"""
+    # the gate starts the folder tracking from the hook input's cwd, so cd mkway/locks in one call and echo x > engine.json
+    # in the next is refused. A cwd that is missing or outside the root makes a relative write everywhere.
     locks = str(task / "mkway" / "locks")
     v = gate_call(gate_lock.check, task, tool="Bash", tool_input={"command": "echo x > engine.json"}, cwd=locks)
-    assert v.kind == "refuse" and v.reason_id == "lock-file-by-session"
+    assert v.kind == "refuse"
+    assert v.reason_id == "lock-file-by-session"
     import dispatch
-    for cwd in (None, str(task.parent / "elsewhere")):
-        ctx = dispatch.make_context(profile=_profile(task), root=task, session_id="s1", event="PreToolUse", gate="g",
-                                    tool_name="Bash", tool_input={}, budget_seconds=None, once=lambda t: True,
-                                    env={}, cwd=cwd)
-        assert ctx.shell_writes("echo x > out.txt").everywhere, cwd
-        assert not ctx.shell_writes("echo x > /abs/out.txt").everywhere, cwd
+    cwd = make_cwd(task)
+    ctx = dispatch.make_context(profile=_profile(task), root=task, session_id="s1", event="PreToolUse", gate="g",
+                                tool_name="Bash", tool_input={}, budget_seconds=None, once=lambda t: True,
+                                env={}, cwd=cwd)
+    assert ctx.shell_writes("echo x > out.txt").everywhere, cwd
+    assert not ctx.shell_writes("echo x > /abs/out.txt").everywhere, cwd
 
 
 def forge_status(root, card_id, was, now):
@@ -196,25 +200,32 @@ def two_cards(tmp_path):
     return root
 
 
-def test_start_and_compaction_never_move_the_baseline(two_cards):
-    """M1 (close check; R54): the card changes are counted from the owner's last re-seal (`card resync`); a start or
-    a compaction shows them and never moves the baseline; the re-seal does. Catches: a forged-and-resealed status
-    whose «(no record)» line is used up by the forging session's own compaction."""
-    want = ["CARD-001 proposed -> open (open by owner)", "CARD-002 proposed -> open (no record)"]
-    for source in ("startup", "compact", "startup"):
-        context = _session_start(two_cards, source)["hookSpecificOutput"]["additionalContext"]
+def _change_lines(root, sources):
+    """The «card changes since» line of each session start, in the order the sources are given, on one root."""
+    lines = []
+    for source in sources:
+        context = _session_start(root, source)["hookSpecificOutput"]["additionalContext"]
         (line,) = [x for x in context.splitlines() if x.startswith("card changes since")]
-        assert all(w in line for w in want), (source, line)
+        lines.append(line)
+    return lines
+
+
+def test_start_and_compaction_never_move_the_baseline(two_cards):
+    """Checks: a start, a compaction and a second start each show the card changes since the owner's re-seal, and only the re-seal moves the baseline. M1, R54"""
+    # the card changes are counted from the owner's last re-seal (card resync); a start or a compaction shows them and
+    # never moves the baseline; the re-seal does. One root, one sequence: startup, compact, startup, then resync, startup.
+    want = ["CARD-001 proposed -> open (open by owner)", "CARD-002 proposed -> open (no record)"]
+    first, compact, again = _change_lines(two_cards, ["startup", "compact", "startup"])
+    assert all(w in line for w in want for line in (first, compact, again))
     assert cli(two_cards, "card", "resync")[0] == 0
-    context = _session_start(two_cards)["hookSpecificOutput"]["additionalContext"]
-    (line,) = [x for x in context.splitlines() if x.startswith("card changes since")]
-    assert line.endswith("none")
+    (last,) = _change_lines(two_cards, ["startup"])
+    assert last.endswith("none")
 
 
 def test_owner_sees_unrecorded_changes_and_owner_moves(two_cards):
-    """M1 (R54, R60; hooks reference: `systemMessage` is shown to the user): the changes with no record and the
-    owner-only moves since the baseline go to the owner as `systemMessage` and stay in `additionalContext`.
-    Catches: a forge warning that only the model sees."""
+    """Checks: the unrecorded card changes and the owner-only moves since the baseline reach the owner as systemMessage and stay in additionalContext. M1, R54, R60"""
+    # the changes with no record and the owner-only moves since the baseline go to the owner as systemMessage and stay in
+    # additionalContext.
     out = _session_start(two_cards)
     shown = out.get("systemMessage") or ""
     assert "CARD-002 proposed -> open (no record)" in shown

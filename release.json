@@ -1,0 +1,6 @@
+{
+  "branch": "master",
+  "full_command": ["python", "-m", "pytest", "-n", "auto", "--dist", "loadgroup", "--cov=engine", "--cov-branch", "--cov-report=term"],
+  "narrow_paths": [["cards/**", "cards/REGISTER.md", "CHANGELOG.md"]],
+  "narrow_command": ["python", "-m", "pytest", "tests/test_meta_cards.py", "tests/test_register.py"]
+}

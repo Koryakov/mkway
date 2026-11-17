@@ -36,10 +36,9 @@ def _mixed(root):
 
 
 def test_the_outbox_command_prints_a_row_per_file(tmp_path):
-    """E13: `mkway outbox` prints one row per file under `outbox.dir` (check files are not rows), sorted by path:
-    file, the first eight digits of its sha256, the state (valid, stale, unproven, missing), the checker and the time
-    of the check's write (`-` for none); a file that is not valid has indented problem lines under its row, and a valid
-    one has none. Catches: a board that lists check files, hides the state or never says why."""
+    """Checks: `mkway outbox` prints one row per file under outbox.dir, sorted by path, with its sha, state and checker (E13)."""
+    # check files are not rows; a file that is not valid has indented problem lines under its row, and a valid one has
+    # none; Catches: a board that lists check files, hides the state or never says why
     root = make_root(tmp_path)
     ok, missing, stale, unproven = _mixed(root)
     code, out, err = cli(root, "outbox")
@@ -49,7 +48,8 @@ def test_the_outbox_command_prints_a_row_per_file(tmp_path):
     assert rows[ok] == [ok, sha_of(Path(root) / ok)[:8], "valid", "critic", "2026-11-11T10:03:00Z"]
     assert rows[missing] == [missing, sha_of(Path(root) / missing)[:8], "missing", "-", "-"]
     assert rows[stale][1:4] == [sha_of(Path(root) / stale)[:8], "stale", "critic"]
-    assert rows[unproven][2] == "unproven" and rows[unproven][3] == "critic"
+    assert rows[unproven][2] == "unproven"
+    assert rows[unproven][3] == "critic"
     assert ok not in problems
     assert any(f"{missing}{SUFFIX}" in p for p in problems[missing])
     assert any("changed" in p for p in problems[stale])
@@ -57,24 +57,29 @@ def test_the_outbox_command_prints_a_row_per_file(tmp_path):
 
 
 def test_the_outbox_command_without_a_folder(tmp_path):
-    """E13: with no `outbox.dir` the command exits 0 and says which key to set; with a folder that holds no file it
-    says so. Catches: a command that fails or prints nothing where the feature is simply not set up."""
+    """Checks: with no outbox.dir the command exits 0 and names the key; with an empty folder it says so (E13)."""
+    # Catches: a command that fails or prints nothing where the feature is simply not set up
     bare = make_root(tmp_path / "bare", outbox=None)
     code, out, err = cli(bare, "outbox")
-    assert code == 0 and "outbox.dir" in out
+    assert code == 0
+    assert "outbox.dir" in out
     empty = make_root(tmp_path / "empty")
     code, out, err = cli(empty, "outbox")
-    assert code == 0 and "no files" in out and OUT in out
+    assert code == 0
+    assert "no files" in out
+    assert OUT in out
 
 
 def test_a_session_may_run_the_outbox_command(tmp_path):
-    """E13: the command only reads: a session's shell prints the same rows as the owner's terminal, and writes no
-    record. Catches: a read-only board made owner-only."""
+    """Checks: a session's shell prints the same rows as the owner's terminal and writes no record (E13)."""
+    # Catches: a read-only board made owner-only
     root = make_root(tmp_path)
     _mixed(root)
     own = cli(root, "outbox")
     session = cli(root, "outbox", session=True)
-    assert session[0] == 0 and session[1] == own[1] and "mkway-ok" not in session[1]
+    assert session[0] == 0
+    assert session[1] == own[1]
+    assert "mkway-ok" not in session[1]
 
 
 def _context(root, session="s1"):
@@ -85,9 +90,9 @@ def _context(root, session="s1"):
 
 
 def test_the_start_block_counts_files_and_unchecked(tmp_path):
-    """E14: with `outbox.dir` set the start block has `outbox: N files, M unchecked`: N the files that are not check
-    files, M those whose state is not valid; with the folder empty it says 0 and 0; with no `outbox.dir` there is no
-    line. Catches: a count that includes check files, or a line in a task that has no outbox."""
+    """Checks: with outbox.dir set the start block counts files and unchecked ones, 0 and 0 when empty, no line without it (E14)."""
+    # N the files that are not check files, M those whose state is not valid; Catches: a count that includes check
+    # files, or a line in a task that has no outbox
     root = make_root(tmp_path)
     assert "outbox: 0 files, 0 unchecked" in _context(root).splitlines()
     _mixed(root)

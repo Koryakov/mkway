@@ -1,17 +1,23 @@
 """mkway command line (card MW-002; card MW-003).
 
     mkway.py hook <event> --group <name> [--root <path>] [--profile <path>]
+    mkway.py hook-wait [--root <path>] [--profile <path>]   the inbox waiter, a Stop handler (MW-078)
     mkway.py install --from <engine repo> [--ref <sha or tag>] [--vcs git|none] [--python <command>]
                      [--shared <absolute folder>] [--root <path>] [--profile <path>]
     mkway.py check [--root <path>] [--profile <path>]
+    mkway.py upgrade --target <repo> [--root <name>] [--dry-run] [--from-head]   the owner's: install the newest proven-green
+                                    engine release into the granted task root, one ledger row, one commit; prints one JSON
+                                    object; --from-head is internal (MW-104)
+    mkway.py green record --repo <path> --into <branch> --branch <name> --from <sha> --sha <sha> --command <text>
+                          --kind full|narrow [--rule <n>] [--seconds <n>]   the owner's: one line of the green record (MW-104)
     mkway.py card new <title> | list | resync [--add-ordered-by] | take <id> | release <id> [--force] | open <id>
-                  | close <id> | set <id> open|waiting|closed
+                  | close <id> | set <id> open|waiting|closed | release-red <test id> --to <card>
     mkway.py give <card> <who>      the owner's: who ordered a card (a session id prefix, or `owner`; card MW-011); a
                                     registered lead's give of a card it ordered is a hand-off (MW-017)
     mkway.py lead register | accept <card> | add <id-prefix> | remove <id-prefix>   the lead role (MW-017); add and
                                     remove are the owner's
     mkway.py ack <id>               a session clears one row of its own inbox (the owner's terminal: any inbox; MW-017, MW-018)
-    mkway.py send --to <id-prefix> --kind <kind> --file <body> [--reply-to <id>]   a message into a session's inbox, in the
+    mkway.py send --to <id-prefix> --kind <kind> (--file <body> | --text "<body>") [--reply-to <id>] a message into a session's inbox, in the
                                     star per card; prints the ping line to send with SendMessage (MW-018)
     mkway.py inbox <id>             shows one row of the caller's own inbox (the owner's terminal: any row; MW-018)
     mkway.py board                  inboxes, cards and asks in one view (MW-018)
@@ -21,8 +27,12 @@
     mkway.py gate off <name> | on <name> | watch <name>   (watch: a form gate only; `on` ends it; card MW-012)
     mkway.py delete --list <file>
     mkway.py trash list | empty --older-than <days>
-    mkway.py ledger add --card <id> --topic <text> (--quote <verbatim> | --quote-file <path>) --source <text>
+    mkway.py ledger add --card <id> --topic <text> (--quote <verbatim> | --quote-file <path>) --source <text> [--replaces <row id>]
                         [--status <text>] [--by <text>]     (topic: plain words, letters, digits, spaces, dashes)
+    mkway.py verdict add <card> <node>... <true|weak|wrong> <reason>   a blind reader's verdict rows: the only writer of
+                                    tests/verdicts/<card>.md; the caller is the lock gate's permit (MW-080)
+    mkway.py verdict recut <card> <node> <reason>   the card's orderer re-cuts a weak or wrong verdict: a `recut` row, a
+                                    record and a ledger row; a fresh blind verdict follows (MW-100)
     mkway.py search <words>...
     mkway.py asks                   the board of the ask files (MW-014)
     mkway.py outbox                 the files made for someone outside the session, the state of each check (MW-019)
@@ -39,7 +49,7 @@ and `shell`, exit 0 in every other group; the root launcher applies the same rul
 Who runs a command (card MW-003, C44): a session's shell carries `CLAUDECODE`; the owner's own terminal does not.
 A session's successful card or search command prints `mkway-ok <kind> <value> <nonce>` for the `post` group, which
 records it with the session id; an owner's command appends its own `by: owner` record. The owner-only commands
-(lock, gate, install, upgrade, give, card open / close / resync, release --force; with `cards.approver: orderer` a
+(lock, gate, install, upgrade, green record, give, card open / close / resync, release --force; with `cards.approver: orderer` a
 session's `card close` is the orderer's, checked by the lock gate and the CLI) are refused to a session by the lock
 gate before they run, and by this CLI itself when `CLAUDECODE` is present (close-fix 1, a tripwire: a session can
 strip it); the owner's way out is their own terminal, where no hook runs (decision 4).
@@ -47,6 +57,8 @@ strip it); the owner's way out is their own terminal, where no hook runs (decisi
 from __future__ import annotations
 
 import argparse
+import datetime
+import json
 import os
 import sys
 from pathlib import Path
@@ -57,6 +69,8 @@ if _HERE not in sys.path:
 
 import asks  # noqa: E402
 import cardtool  # noqa: E402
+import core_ping  # noqa: E402
+import core_session  # noqa: E402
 import dispatch  # noqa: E402
 import gatemode  # noqa: E402
 import install  # noqa: E402
@@ -72,9 +86,12 @@ import profiles  # noqa: E402
 import records  # noqa: E402
 import register  # noqa: E402
 import rules  # noqa: E402
+import scorecard  # noqa: E402
 import search  # noqa: E402
 import sessions  # noqa: E402
 import trash  # noqa: E402
+import upgrade  # noqa: E402
+import waiter  # noqa: E402
 
 
 def _place(parser):
@@ -98,6 +115,9 @@ def _parser() -> argparse.ArgumentParser:
     hook.add_argument("event")
     hook.add_argument("--group", required=True)
     _place(hook)
+    wait = sub.add_parser("hook-wait", help="the inbox waiter: a Stop handler that wakes an idle session when a new row "
+                          "reaches its inbox (called by Claude Code, installed with asyncRewake; MW-078)")
+    _place(wait)
     inst = sub.add_parser("install", help="copy the engine into a task root and generate its hook entries")
     inst.add_argument("--from", dest="source", required=True)
     inst.add_argument("--ref")
@@ -111,6 +131,18 @@ def _parser() -> argparse.ArgumentParser:
     _place(inst)
     chk = sub.add_parser("check", help="compare the copy with its lock, run its tests and the term scan")
     _place(chk)
+    upg = sub.add_parser("upgrade", help="the owner's: install the newest proven-green engine release into the granted task "
+                         "root, with one ledger row and one commit (MW-104)")
+    upg.add_argument("--target", help="the one folder the owner's grant names")
+    upg.add_argument("--root", help="the task root inside the target, when the grant lists several")
+    upg.add_argument("--dry-run", action="store_true", help="run every check and print the plan; change nothing")
+    upg.add_argument("--from-head", action="store_true", help="internal: install the engine HEAD when the green record "
+                     "proves it, by a full run or by the narrow route")
+    green = sub.add_parser("green", help="the owner's: the green record the upgrade reads (MW-104)")
+    green_sub = green.add_subparsers(dest="green_command", required=True)
+    rec = green_sub.add_parser("record", help="append one line to the green record")
+    for flag in ("repo", "into", "branch", "from", "sha", "command", "kind", "rule", "seconds"):
+        rec.add_argument("--" + flag, dest=flag + "_")  # `command_`: never the subcommand's own `command`
     card = sub.add_parser("card", help="the cards tool")
     card_sub = card.add_subparsers(dest="card_command", required=True)
     new = card_sub.add_parser("new")
@@ -130,6 +162,11 @@ def _parser() -> argparse.ArgumentParser:
     rel.add_argument("card_id")
     rel.add_argument("--force", action="store_true", help="the owner's: free a card another session holds")
     _place(rel)
+    rred = card_sub.add_parser("release-red", allow_abbrev=False,
+                               help="the orderer's: move one red test the card inherited at its take to another open card")
+    rred.add_argument("test_id", help="the whole test id, as `card take` recorded it")
+    rred.add_argument("--to", required=True, dest="to_card", help="the open card that now owns the red")
+    _place(rred)
     cset = card_sub.add_parser("set", allow_abbrev=False)
     cset.add_argument("card_id")
     cset.add_argument("status")
@@ -157,19 +194,25 @@ def _parser() -> argparse.ArgumentParser:
     send_p = sub.add_parser("send", help="put a message into a session's inbox; prints the ping line to send")
     send_p.add_argument("--to", required=True, help="a session id, or a prefix that starts exactly one")
     send_p.add_argument("--kind", required=True, choices=messages.KINDS)
-    send_p.add_argument("--file", required=True, help="the file that holds the body")
+    send_body = send_p.add_mutually_exclusive_group(required=True)
+    send_body.add_argument("--file", help="the file that holds the body")
+    send_body.add_argument("--text", help="the body itself, literal (no `$(...)`, backtick or `$name`); for a session "
+                                          "that cannot write a file (MW-055)")
     send_p.add_argument("--reply-to", dest="reply_to", help="the id of a row of your own inbox this answers")
     _place(send_p)
     inbox_p = sub.add_parser("inbox", help="show one row of your own inbox")
     inbox_p.add_argument("row_id")
     _place(inbox_p)
     _place(sub.add_parser("board", help="inboxes, cards and asks in one view"))
+    _place(sub.add_parser("scorecard", help="what the process cost the task: refusals per reason, test seconds, hook time, asks (MW-112)"))
     _place(sub.add_parser("leads", help="every lead: cards ordered, overdue, last activity, unacked notices"))
     gate_p = sub.add_parser("gate", help="the owner's switch of one gate in the profile")
     gate_sub = gate_p.add_subparsers(dest="gate_command", required=True)
     for name in ("off", "on", "watch"):  # `watch` (MW-012): a form gate still runs but never blocks; `on` ends it
         g = gate_sub.add_parser(name)
         g.add_argument("name")
+        if name == "watch":  # MW-112 (R284a): the one lever for another end date than the engine's 7 days
+            g.add_argument("--until", default=None, metavar="YYYY-MM-DD", help="the end date of the watch")
         _place(g)
     lock = sub.add_parser("lock", help="the owner's lock files")
     lock_sub = lock.add_subparsers(dest="lock_command", required=True)
@@ -198,6 +241,8 @@ def _parser() -> argparse.ArgumentParser:
                             "line break is stripped; the file is not deleted")
     ladd.add_argument("--source", required=True, type=_text)
     ladd.add_argument("--status", default=ledger.IN_FORCE, type=_status)
+    ladd.add_argument("--replaces", type=_text, metavar="ID",
+                      help="the id of an earlier row this row replaces; that row then reads as superseded")
     ladd.add_argument("--by", type=_status, help="who wrote the row; default `session:<session id>`; `owner` only "
                                                  "from the owner's terminal")
     _place(ladd)
@@ -238,6 +283,27 @@ def _parser() -> argparse.ArgumentParser:
     tempty = trash_sub.add_parser("empty")
     tempty.add_argument("--older-than", dest="older_than", type=float, required=True, help="days")
     _place(tempty)
+    ver = sub.add_parser("verdict", help="a blind reader's verdict rows (MW-080)")
+    ver_sub = ver.add_subparsers(dest="verdict_command", required=True)
+    vadd = ver_sub.add_parser("add", allow_abbrev=False, help="write the verdict rows of one reader run: the only writer")
+    vadd.add_argument("card_id", help="a card id, or a bare number that takes the profile's card prefix")
+    vadd.add_argument("items", nargs="+", type=_text, metavar="NODE... WORD REASON",
+                      help="one or more test nodes the card names, then true, weak or wrong, then the reason")
+    _place(vadd)
+    vrecut = ver_sub.add_parser("recut", allow_abbrev=False, help="re-cut a weak or wrong verdict: the card's orderer only")
+    vrecut.add_argument("card_id", help="a card id, or a bare number that takes the profile's card prefix")
+    vrecut.add_argument("node", type=_text, help="the one test node the card names whose last verdict is weak or wrong")
+    vrecut.add_argument("reason", type=_text, help="what changed in the row's words or in the test")
+    _place(vrecut)
+    reader = sub.add_parser("reader", help="the reader's allowlist: one run at a time per session (MW-116)")
+    reader_sub = reader.add_subparsers(dest="reader_command", required=True)
+    rstart = reader_sub.add_parser("start", allow_abbrev=False,
+                                   help="write the allow file of this session: the test files of the card's nodes and the extract")
+    rstart.add_argument("card_id", help="a card id, or a bare number that takes the profile's card prefix")
+    _place(rstart)
+    rend = reader_sub.add_parser("end", allow_abbrev=False, help="empty the allow list of this session (the owner names one)")
+    rend.add_argument("--session", dest="target_session", default=None, help="the owner's terminal: the session whose list to empty")
+    _place(rend)
     return parser
 
 
@@ -281,6 +347,7 @@ class Run:
     def __init__(self, root: Path, profile, env):
         self.root = root
         self.profile = profile
+        self.env = env
         self.session = records.SESSION_ENV in env
         self.state = profiles.state_dir(root, profile)
         self.shared = profiles.shared_state_dir(root, profile)  # MW-017: leads, inboxes and sessions cross work trees
@@ -314,6 +381,10 @@ def _owner_only(args, profile=None, root=None):
     command = args.command
     if command == "install":
         return "install"
+    if command == "upgrade":  # MW-104: the owner's grant is never used by a session
+        return "upgrade"
+    if command == "green":
+        return "green record"
     if command == "lock" and args.lock_command in ("open", "close"):
         return f"lock {args.lock_command}"
     if command in HOLD_WORDS:
@@ -367,6 +438,11 @@ def main(argv=None, env=None) -> int:
     session = records.SESSION_ENV in env  # present with any value, the empty value included
     if session and _owner_only(args):
         return _refuse_in_session(_owner_only(args))
+    if args.command == "hook-wait":  # MW-078: before dispatch.run, which must answer fast; the waiter lives for hours
+        try:
+            return waiter.main(_read_stdin(), args.root, args.profile, env)
+        except Exception:
+            return 0  # the waiter never blocks and never fails a Stop
     if args.command == "hook":
         result = dispatch.run(args.event, args.group, _read_stdin(), root_arg=args.root, profile_arg=args.profile)
         if result.stdout:
@@ -374,8 +450,20 @@ def main(argv=None, env=None) -> int:
         if result.stderr:
             sys.stderr.write(result.stderr)
         return result.exit_code
+    if args.command == "upgrade":  # MW-104: no task root of its own; the grant names the root
+        code, answer = upgrade.run_upgrade(args.target, args.root, args.dry_run, args.from_head, env, upgrade.ENGINE_FILE)
+        print(json.dumps(answer, indent=2))
+        return code
+    if args.command == "green":
+        fields = {k: getattr(args, k + "_") for k in
+                  ("repo", "into", "branch", "from", "sha", "command", "kind", "rule", "seconds")}
+        code, text = upgrade.record_green(fields, env, upgrade.ENGINE_FILE)
+        if code:
+            return _fail(text)
+        print(text)
+        return 0
     try:
-        root = paths.find_root(env=env, root_arg=args.root, vcs=getattr(args, "vcs", None))
+        root = paths.find_root(env=env, root_arg=args.root, vcs=getattr(args, "vcs", None), env_needs_cwd=True)
     except paths.RootNotFound as exc:
         return _fail(str(exc))
     if args.command == "install":
@@ -418,6 +506,10 @@ def main(argv=None, env=None) -> int:
             return _gate(run, args)
         if args.command == "ledger":
             return _ledger(run, args)
+        if args.command == "verdict":
+            return _verdict(run, args)
+        if args.command == "reader":
+            return _reader(run, args)
         if args.command == "give":
             return _give(run, args)
         if args.command == "lead":
@@ -430,6 +522,9 @@ def main(argv=None, env=None) -> int:
             return _inbox(run, args)
         if args.command == "board":
             print(chr(10).join(messages.board_lines(run.root, run.profile)))
+            return 0
+        if args.command == "scorecard":  # MW-112: read-only, a session's command too
+            print("\n".join(scorecard.lines(run.root, run.profile)))
             return 0
         if args.command == "leads":
             print("\n".join(leads.view_lines(run.root, run.profile)))
@@ -549,7 +644,9 @@ def _ask(run: Run, args) -> int:
             ask, row = asks.take_default(run.root, run.profile, args.ask_id, by=_by(run))
             reason, text = "ask-default-taken", f"ask {ask.id} default taken: {ask.default}"
         else:
-            ask, row = asks.answer(run.root, run.profile, args.ask_id, args.quote)
+            caller = (cardtool.take_by_permit(run.state) or "") if run.session else None  # MW-119: None = owner's terminal
+            ask, row = asks.answer(run.root, run.profile, args.ask_id, args.quote, caller=caller,
+                                   lead=bool(caller) and leads.is_lead(run.shared, caller), state=run.state)
             reason, text = "ask-answered", f"ask {ask.id} answered"
     except asks.AskError as exc:
         _ask_log(run, exc.reason, args.ask_id, "refuse")
@@ -619,10 +716,117 @@ def _ledger(run: Run, args) -> int:
         return _fail("ledger-by-owner: only the owner's terminal writes by=owner")
     try:
         row = ledger.add(run.root, run.profile, card=args.card, topic=args.topic, quote=args.quote,
-                         source=args.source, status=args.status, by=_by(run, args.by))
+                         source=args.source, status=args.status, by=_by(run, args.by),
+                         replaces=(args.replaces or "").strip())
+    except ledger.UnknownRow as exc:
+        run.refusal("ledger-replaces-unknown")
+        return _fail(f"ledger-replaces-unknown: no row {exc} in the ledger")
     except OSError as exc:
         return _fail(f"the ledger row was not written ({exc.__class__.__name__})")
     print(f"ledger {row['id']} added to {ledger.path(run.root, run.profile).relative_to(run.root).as_posix()}")
+    return 0
+
+
+VERDICT_USAGE = "mkway verdict add <card> <node>... <true|weak|wrong> <reason>"
+
+
+def _verdict(run: Run, args) -> int:
+    """`verdict add` or `verdict recut` (MW-080, MW-100)."""
+    return _verdict_recut(run, args) if args.verdict_command == "recut" else _verdict_add(run, args)
+
+
+def _verdict_outcome(run: Run, caller: str, card_id: str, verdict, mode_key: str = "tests.verdict_add.mode"):
+    """The exit code of a refused verdict command (1), else None. Each refusal watch mode let through is a `would-refuse`
+    row in the refusal log and a printed `watch:` line; a blocking refusal is a refusal row each and one failure line."""
+    for seen in verdict.watched:
+        logs.write_refusal(run.state, logs.row(session=caller or None, event="command", tool=None, gate="cards",
+                                               reason_id=seen.reason, target=card_id, kind=gatemode.WOULD_REFUSE,
+                                               message=seen.text))
+        print(f"watch: {seen.text} (allowed: {mode_key} is watch)")
+    if verdict.allowed:
+        return None
+    for refusal in verdict.refusals:
+        run.refusal(refusal.reason, card_id)
+    return _fail(" | ".join(r.text for r in verdict.refusals))
+
+
+def _verdict_recut(run: Run, args) -> int:
+    """`verdict recut` (MW-100; R251, R251a, R251b): the card's orderer answers a weak or wrong verdict with a re-cut. The
+    caller is the lock gate's one-use permit, as in `verdict add`; the owner's terminal has none and is refused."""
+    import verdict_add
+    import verdict_recut
+    caller = (cardtool.take_by_permit(run.state) or "") if run.session else ""
+    card_id = cardtool.card_ref(run.profile, args.card_id)
+    node = verdict_add.node_of(args.node)
+    try:
+        verdict = verdict_recut.apply(run.root, run.profile, run.state, card_id, node, args.reason, caller, not run.session)
+    except OSError as exc:
+        return _fail(f"the recut was not written ({exc.__class__.__name__}); check the verdict file and the ledger of {card_id}")
+    failed = _verdict_outcome(run, caller, card_id, verdict)
+    if failed is not None:
+        return failed
+    print(chr(10).join(verdict_recut.report(card_id, node, verdict)))
+    return 0
+
+
+def _verdict_add(run: Run, args) -> int:
+    """`verdict add` (MW-080; R194, R196, R196a): the only writer of a verdict row. The caller is the lock gate's one-use
+    permit (taken at every session run, used or not); the owner's terminal has none and is refused by the decision. A
+    refusal is a row in the refusal log and exit 1; in watch mode a refusal outside the independence ones is a `would-refuse`
+    row and the call goes ahead."""
+    import verdict_add
+    caller = (cardtool.take_by_permit(run.state) or "") if run.session else ""
+    items = list(args.items)
+    word = items[-2].strip().casefold() if len(items) > 1 else ""
+    if len(items) < 3 or word not in verdict_add.WORDS:
+        sys.stderr.write(f"mkway: usage: {VERDICT_USAGE}: the verdict word is true, weak or wrong, then the reason"
+                         + chr(10))
+        return 2
+    card_id = cardtool.card_ref(run.profile, args.card_id)
+    nodes = list(dict.fromkeys(verdict_add.node_of(i) for i in items[:-2]))
+    try:
+        verdict = verdict_add.apply(run.root, run.profile, run.state, card_id, nodes, word, items[-1], caller,
+                                    not run.session)
+    except OSError as exc:
+        return _fail(f"the verdict rows were not written ({exc.__class__.__name__}); check the verdict file of {card_id}")
+    failed = _verdict_outcome(run, caller, card_id, verdict)
+    if failed is not None:
+        return failed
+    print(chr(10).join(verdict_add.report(card_id, nodes, word, verdict)))
+    return 0
+
+
+def _reader(run: Run, args) -> int:
+    """`reader start <card>` and `reader end` (MW-116; R287, R287c): the allow file of the reader's allowlist hook. The id is
+    the spawning session's own, proved as a messaging command proves it (`_message_session`: the launcher's variable and the
+    lock gate's permit). The owner's terminal has no session: it can only end a named session's run (`--session`), the
+    orderer's release that the busy refusal names."""
+    import reader_allow
+    state = run.state
+    if args.reader_command == "end":
+        if run.session and args.target_session:
+            return _fail("`mkway reader end --session` is the owner's command; a session empties its own list with "
+                         "`mkway reader end`")
+        if not run.session and not args.target_session:
+            return _fail("the owner's terminal names the session whose run ends: `mkway reader end --session <id>`")
+        session = _message_session(run) if run.session else args.target_session
+        if not reader_allow.end(state, session):
+            print(f"session {session} has no allow file: nothing to empty")
+            return 0
+        print(f"the allow list of session {session} is empty")
+        return 0
+    if not run.session:
+        return _fail("`mkway reader start` is a session's command: the allow file is keyed by the id of the spawning "
+                     "session, and the owner's terminal has none; the owner empties a run with `mkway reader end --session <id>`")
+    session = _message_session(run)
+    card_id = cardtool.card_ref(run.profile, args.card_id)
+    try:
+        doc = reader_allow.start(run.root, run.profile, state, session, card_id)
+    except reader_allow.ReaderError as exc:
+        run.refusal(exc.reason, card_id)
+        return _fail(exc.text)
+    print(f"allow file written for session {session}: {len(doc['files'])} files (the test files of {card_id} and the extract of "
+          f"its Acceptance rows); start the reader now, one run at a time; `mkway reader end` empties the list")
     return 0
 
 
@@ -640,6 +844,8 @@ def _card(run: Run, args) -> int:
         return 0
     if args.card_command in ("take", "release", "open", "close", "set"):
         return _move(run, args)
+    if args.card_command == "release-red":
+        return _release_red(run, args)
     if args.card_command == "resync":
         diff = register.reseal(root, profile, add_orderer=args.add_ordered_by)
         print("\n".join(diff) if diff else "register: no difference against register.last")
@@ -712,21 +918,43 @@ def _lead(run: Run, args) -> int:
 
 
 def _message_session(run: Run) -> str:
-    """The session id of a messaging command: the one-use permit of the lock gate (the hook input is the only source of
-    an id). `message-no-session` when there is none."""
-    session = cardtool.take_by_permit(run.state)
-    if not session:
-        raise messages.MessageError("message-no-session", f"no hook check of this call was found (none, used, or older "
-                                                          f"than {cardtool.PERMIT_SECONDS} s), so the session id is not "
-                                                          f"established; run the command alone, in its plain form, in "
-                                                          f"a session with the engine hooks")
-    return session
+    """The session id of a messaging command (card MW-110, rulings R279 and R279c): the variable is never the proof alone. The
+    lock gate's one-use permit, written for the plain engine call with the hook-verified session id under the session's own
+    id (`permits/<session id>.json`), is the proof. With the variable set, only the file it names is opened and consumed,
+    used or not; the id inside must equal the variable, else `session-id-mismatch`. With no own permit the variable counts
+    only while the period is not over (`core_session.watch_passed`: `messaging.session_id_watch_until` is not past and can
+    be read), with one warn row `session-id-unset`; after it, `session-id-unverified`. With no variable, before the end
+    date, the single most recent fresh permit is taken with a warn row that names the limit (two sessions at once); after
+    it `session-id-unverified`; with no permit either `message-no-session`. The decision is the pure
+    `core_session.decide_sender`."""
+    name = core_session.SESSION_ENV
+    env_id = str(run.env.get(name) or "").strip()
+    day, until = logs.now().date().isoformat(), profiles.session_id_watch_until(run.profile)
+    bad = profiles.session_id_watch_unreadable(run.profile)
+    own = messages.take_message_permit(run.state, env_id) if env_id else None  # R279c: only the file the variable names
+    latest = None
+    if not env_id and not core_session.watch_passed(day, until, bad):
+        latest = messages.take_latest_message_permit(run.state)
+    decided = core_session.decide_sender(core_session.SenderFacts(
+        env_name=name, env_id=env_id, own_permit=own, latest_permit=latest, day=day, watch_until=until, watch_bad=bad,
+        launcher=core_session.launcher_line(name), permit_seconds=cardtool.PERMIT_SECONDS))
+    if decided.reason:
+        raise messages.MessageError(decided.reason, decided.text)
+    if decided.warn:  # the id is not proven by its own permit: one warn row that names the limit
+        try:
+            logs.write_refusal(run.state, logs.row(session=decided.session, event="command", tool=None,
+                                                   gate="message.session", reason_id="session-id-unset", target=None,
+                                                   kind="warn", note=decided.note))
+        except OSError:
+            pass
+    return decided.session
 
 
 def _ack(run: Run, args) -> int:
     """`ack <id>` (card MW-017, MW-018): a session clears one row of its own inbox, a builder as well as a lead; a row of
-    another inbox is `ack-not-yours`; the owner's terminal acks any row."""
-    row = leads.ack(run.shared, _message_session(run) if run.session else None, args.notice_id)
+    another inbox is `ack-not-yours`; the owner's terminal acks any row. Record R1 is written first (R279c Q3)."""
+    session = _message_session(run) if run.session else None
+    row = messages.ack(run.shared, session, args.notice_id)
     print(f"{row.get('kind', 'notice')} {row['id']} acked")
     return 0
 
@@ -749,13 +977,26 @@ def _send(run: Run, args) -> int:
                                                          "and reads `mkway board`; the owner tells a lead through a "
                                                          "session")
     sender = _message_session(run)
-    sent = messages.send(run.root, run.profile, run.shared, sender, args.to, args.kind,
-                         _read_body(run.root, args.file), args.reply_to)
+    if args.text is not None:  # MW-055: the CLI writes the body itself; no file a refused session could not write
+        problem = messages.text_problem(args.text)
+        if problem:
+            raise messages.MessageError("message-text-unsafe", problem)
+        body = args.text
+    else:
+        body = _read_body(run.root, args.file)
+    file = args.file if args.text is None else "--text"  # record R1 is written before the delivery (R279c Q3)
+    sent = messages.send(run.root, run.profile, run.shared, sender, args.to, args.kind, body, args.reply_to,
+                         record=lambda row: messages.record_send(run.shared, row, sender, file))
     print(f"{args.kind} {sent.row['id']} is in the inbox of {sent.target}")
-    print(messages.ping_line(sent.row["id"]))
+    line = messages.ping_line(sent.row["id"])
+    print(line)
     print(f"root: {sent.root or cardtool.NE}")
-    print("next: in ListAgents find the session that runs in that root folder and send it exactly the ping line above, "
-          "nothing else, with SendMessage (a ref is not a session id; no socket is used)")
+    name = messages.target_name(run.root, run.profile, run.shared, sent.target, sender)  # MW-076: R185, R188
+    if name:
+        print(core_ping.send_ping_text(name, line))
+    else:
+        print("next: in ListAgents find the session that runs in that root folder and send it exactly the ping line above, "
+              f"nothing else, with SendMessage (a ref is not a session id; no socket is used); {core_ping.CLAUSE}")
     return 0
 
 
@@ -792,20 +1033,27 @@ def _gate(run: Run, args) -> int:
     known = {e.get("gate") for e in dispatch.load_manifest(dispatch.ENGINE_DIR) if e.get("function")}
     if args.name not in known:
         return _fail(f"unknown gate {args.name!r}; gates with code: {', '.join(sorted(known))}")
-    if args.gate_command == "watch":  # MW-012: a marker only; the profile is not changed
+    until = replaced = None
+    if args.gate_command == "watch":  # MW-012: a marker; MW-112: and the end date in the profile
         if gatemode.gate_class(dispatch.load_manifest(dispatch.ENGINE_DIR), args.name) != gatemode.FORM:
             run.refusal("gate-watch-integrity", args.name)
             return _fail(f"gate-watch-integrity: integrity gates never watch; {args.name} is an integrity gate and "
-                         f"always blocks")
-        gatemode.write_marker(run.state, args.name, "owner")
-        logs.write_refusal(run.state, gatemode.transition_row(args.name, "gate-watch", cause="owner"))
-        print(f"gate {args.name} watch: it still runs, a refusal is logged as would-refuse and the call goes ahead; "
-              f"`mkway gate on {args.name}` returns it to blocking")
-        return 0
+                         f"always blocks; to try a gate without blocking watch a form gate, for example "
+                         f"`mkway gate watch message`")
+        if args.until is not None and gatemode.until_date(args.until) is None:
+            return _fail(f"--until {args.until!r} is not a date (YYYY-MM-DD); the profile was not changed")
+        until = args.until or (logs.now().date() + datetime.timedelta(days=gatemode.WATCH_DAYS)).isoformat()
+        old = gatemode.watch_until(run.profile, args.name)
+        replaced = old if gatemode.until_date(old) is not None else None
     profile = dict(run.profile)
     gates = dict(profile.get("gates") or {})
     entry = dict(gates.get(args.name) or {})
-    entry["on"] = args.gate_command == "on"
+    if args.gate_command == "watch":
+        entry["watch_until"] = until
+    else:
+        entry["on"] = args.gate_command == "on"
+        if args.gate_command == "on":
+            entry.pop("watch_until", None)  # MW-112: a gate that is on has no trial date
     gates[args.name] = entry
     profile["gates"] = gates
     errors = profiles.validate(profile)
@@ -820,6 +1068,13 @@ def _gate(run: Run, args) -> int:
         os.replace(tmp, target)
     except OSError as exc:
         return _fail(f"the profile was not changed ({exc.__class__.__name__}); {tmp.name} may be left beside it")
+    if args.gate_command == "watch":
+        gatemode.write_marker(run.state, args.name, "owner")
+        logs.write_refusal(run.state, gatemode.transition_row(args.name, "gate-watch", cause="owner",
+                                                              **{"from": replaced, "until": until}))
+        print(f"gate {args.name} watch until {until}: it still runs, a refusal is logged as would-refuse and the call goes "
+              f"ahead; `mkway gate on {args.name}` returns it to blocking")
+        return 0
     if args.gate_command == "on":  # MW-012: the only way back from watch, and it is the owner's
         had = gatemode.remove_marker(run.state, args.name)
         logs.write_refusal(run.state, gatemode.transition_row(args.name, gatemode.ON_ROW, cause="owner",
@@ -829,28 +1084,98 @@ def _gate(run: Run, args) -> int:
     return 0
 
 
+def _release_stale(run: Run, card_id: str) -> None:
+    """MW-045: before a take, free each stale holder that blocks it (the holder of `card_id`, or of an open card) with
+    a release row by `stale` and the Log row `stale holder <8 characters> released`. The taking session itself (the
+    gate's permit names it) is never freed."""
+    root, profile = run.root, run.profile
+    held = records.holders(run.state, register.closed_ids(root, profile))
+    stale = cardtool.stale_holders(root, profile, held)
+    if not stale:
+        return
+    taker = cardtool.take_by_permit(run.state) if run.session else None
+    rows = register.read(root, profile)
+    hours = profiles.cards_stale_hours(profile)
+    for card, who in stale.items():
+        row = register.find(rows, card) or {}
+        if who == taker or (card != card_id and row.get("status") != "open"):
+            continue
+        records.append(run.state, taker, "release", card, by="stale")
+        cardtool.append_log_row(root, profile, card, f"stale holder {who[:8]} released",
+                                f"last seen over {hours:g} h ago; freed when another session took {card_id}")
+        print(f"stale holder {who[:8]} of {card} released")
+
+
+def _notify_orderer(root, profile, card_id, body, caller, cmd) -> None:
+    """The notice to a card's orderer for a move a session made (MW-017, MW-076). `caller`: the session id of the lock
+    gate's one-use permit (the MW-049 mechanism), the notice's `by`; with none, the record keeps `cmd` and the card id
+    for the ping gate's fallback (R189). Never fails the command."""
+    try:
+        leads.notify_orderer(root, profile, card_id, body, by=caller, cmd=cmd)
+    except Exception:
+        pass
+
+
+def _release_red(run: Run, args) -> int:
+    """`card release-red <test id> --to <card>` (MW-108, R283 4): the card's orderer moves an inherited red to another open
+    card. A session's id is the lock gate's one-use by-permit, never a word of the command; the owner's terminal orders the
+    cards that name no session. The card tool decides who may and writes the row."""
+    caller = cardtool.take_by_permit(run.state) if run.session else None
+    if run.session and not caller:
+        raise cardtool.CardError(f"no hook check of this call was found (none, used, or older than "
+                                 f"{cardtool.PERMIT_SECONDS} s), so the orderer is not established; run `mkway card "
+                                 f"release-red` alone, in its plain form, in a session with the engine hooks, or the "
+                                 f"owner runs it in their own terminal", reason="close-not-orderer")
+    print(cardtool.release_red(run.root, run.profile, run.state, args.test_id.replace("\\", "/"), args.to_card, caller))
+    return 0
+
+
 def _move(run: Run, args) -> int:
     """take, release, open, close, set (deliverable 4). Who may run which is the lock gate's (owner-only commands);
     the chain and the close rule are checked here, for the owner's terminal too."""
     root, profile, card_id, sub = run.root, run.profile, args.card_id, args.card_command
+    caller = cardtool.take_by_permit(run.state) if run.session and sub in ("set", "release") else None  # MW-076, R189
     if sub == "take":
         if register.find(register.read(root, profile), card_id) is None:
             raise cardtool.CardError(f"{card_id} is not in the register", reason="card-unknown")
         if not run.session:
             return _fail("`card take` is a session's command: the owner's terminal holds no card")
+        _release_stale(run, card_id)  # MW-045: a holder unseen for `cards.stale_hours` is freed first
         if card_id in records.holders(run.state, register.closed_ids(root, profile)):
-            raise cardtool.CardError(f"{card_id} is held by a session; the owner frees it with `card release "
-                                     f"{card_id} --force` in their own terminal", reason="card-not-yours")
-        run.done("take", card_id)
+            raise cardtool.CardError(f"{card_id} is held by a session; the owner or the card's orderer frees it with "
+                                     f"`card release {card_id}`", reason="card-not-yours")
+        try:  # MW-108: the red at HEAD inside the card's Paths is recorded; a take never fails because of it
+            note = cardtool.record_inherited_red(root, profile, card_id)
+        except (OSError, ValueError) as exc:
+            note = (f"inherited red: the take row could not be written ({exc.__class__.__name__}); the take goes on and "
+                    f"every red in the Paths of {card_id} counts as new red for this card")
+        run.done("take", card_id)  # the ok line stays the first line of the output (MW-054 contract); the note follows
+        print(note)
         return 0
     if sub == "release":
-        if card_id not in records.holders(run.state, register.closed_ids(root, profile)):
+        holder = records.holders(run.state, register.closed_ids(root, profile)).get(card_id)
+        if holder is None:
             print(f"no one holds {card_id}; nothing changed")
             return 0
-        if not run.session and not args.force:
-            raise cardtool.CardError(f"{card_id} is held by a session; the owner frees it with `card release "
-                                     f"{card_id} --force`", reason="card-not-yours")
-        run.done("release", card_id)
+        if run.session:
+            orderer = cardtool.take_close_permit(run.state, card_id, "release")  # MW-045: the gate's permit names it
+            if orderer is None:
+                run.done("release", card_id)  # the holder's own release; any other session's row frees nothing
+                _notify_orderer(root, profile, card_id, f"builder released {card_id}: it holds the card no more; read its "
+                                                        f"Log, then give it to a new builder or close it", caller,
+                                "card release")  # MW-076, R189: the orderer must act on a release
+                return 0
+            row = register.find(register.read(root, profile), card_id) or {}
+            if holder == orderer or (row.get(register.ORDERED) or register.OWNER) != orderer:
+                raise cardtool.CardError(f"{card_id} was not ordered by this session; only its orderer, or the owner "
+                                         f"in their own terminal, frees a card another session holds",
+                                         reason="card-not-yours")
+            records.append(run.state, orderer, "release", card_id, by="orderer")
+            cardtool.append_log_row(root, profile, card_id, "release", f"released by the orderer {orderer[:8]}")
+            print(f"{card_id} released by its orderer")
+            return 0
+        run.done("release", card_id)  # the owner's terminal, with or without `--force`
+        cardtool.append_log_row(root, profile, card_id, "release", "released by the owner")
         return 0
     if sub == "set":
         target = args.status
@@ -869,6 +1194,8 @@ def _move(run: Run, args) -> int:
         written = cardtool.move(root, profile, card_id, "closed", session=True, record_paths=False, closer=closer,
                                 state=run.state)
         print(f"{card_id} {written}")
+        for note in cardtool.take_notes():  # MW-068, ruling R179
+            print(note)
         run.done(sub, card_id)
         return 0
     if sub == "open" and run.session and cardtool.approver(profile) == "orderer" \
@@ -885,13 +1212,12 @@ def _move(run: Run, args) -> int:
     light = not cardtool.owner_moves(profile)  # light mode: a session may make the owner's moves (close check L2)
     written = cardtool.move(root, profile, card_id, target, session=run.session, record_paths=record, light=light)
     if run.session and sub == "set" and written == "waiting":  # MW-017: the builder finished; the orderer is told
-        try:
-            leads.notify_orderer(root, profile, card_id, f"builder finished: {card_id} went to waiting; read its Log, "
-                                                         f"then close it with `mkway card close {card_id}` once its "
-                                                         f"tests pass")
-        except Exception:
-            pass
+        _notify_orderer(root, profile, card_id, f"builder finished: {card_id} went to waiting; read its Log, then close "
+                                                f"it with `mkway card close {card_id}` once its tests pass", caller,
+                        "card set")
     print(f"{card_id} {written}")
+    for note in cardtool.take_notes():  # MW-068, ruling R179
+        print(note)
     run.done(sub, card_id if sub != "set" else f"{card_id} {written}")
     return 0
 

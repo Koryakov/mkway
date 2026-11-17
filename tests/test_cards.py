@@ -21,7 +21,7 @@ def task(tmp_path):
 
 def _mkway(root, *args):
     return subprocess.run([sys.executable, str(REPO / "mkway.py"), *args, "--root", str(root)],
-                          capture_output=True, text=True, timeout=60)
+                          capture_output=True, text=True, timeout=60, cwd=root)
 
 
 def _register_rows(root):
@@ -31,10 +31,10 @@ def _register_rows(root):
 
 
 def test_card_new_numbers_and_register(task):
-    """E25: `card new` writes <bundle.root>/cards/<PREFIX>-NNN-<slug>/CARD.md from the one-page form, with the id
-    and title in its first line, and adds the register row beside the cards; `card list` prints the rows.
-    Changed by MW-003 (R15 A1, R18): a new card is `proposed`, and the register has a `Paths` column, empty until
-    the owner's `card open` records it."""
+    """Checks: card new writes the card from the one-page form and its register row, and card list prints the rows. E25"""
+    # card new writes <bundle.root>/cards/<PREFIX>-NNN-<slug>/CARD.md from the one-page form, with the id and title in its
+    # first line, and adds the register row beside the cards. Changed by MW-003 (R15 A1, R18): a new card is proposed, and
+    # the register has a Paths column, empty until the owner's card open records it.
     proc = _mkway(task, "card", "new", "First thing: a test")
     assert proc.returncode == 0, proc.stderr
     card = task / "mkway" / "cards" / "CARD-001-first-thing-a-test" / "CARD.md"
@@ -49,14 +49,16 @@ def test_card_new_numbers_and_register(task):
     ]
     listed = _mkway(task, "card", "list")
     assert listed.returncode == 0
-    assert "CARD-001" in listed.stdout and "CARD-002" in listed.stdout and "Second" in listed.stdout
+    assert "CARD-001" in listed.stdout
+    assert "CARD-002" in listed.stdout
+    assert "Second" in listed.stdout
 
 
 def test_card_ids_never_repeat_and_pass_999(task):
-    """E26: the next id is one past the highest id in the register or in the folder names, so an id never repeats
-    (a row whose folder is gone still counts), and ids go past 999.
-    Changed by MW-003 (R19a): the hand-written register is sealed first, as the owner's `card resync` does; an
-    unsealed register is refused as tampered (E14)."""
+    """Checks: a new card takes the id after the highest one in the register or the folder names. E26"""
+    # the next id is one past the highest id in the register or in the folder names, so an id never repeats (a row whose
+    # folder is gone still counts), and ids go past 999. Changed by MW-003 (R19a): the hand-written register is sealed
+    # first, as the owner's card resync does; an unsealed register is refused as tampered (E14).
     import register
     profile = json.loads((task / "mkway" / "profile.json").read_text(encoding="utf-8"))
     folder = task / "mkway" / "cards"
@@ -72,8 +74,9 @@ def test_card_ids_never_repeat_and_pass_999(task):
 
 
 def test_card_form_comes_from_the_engine_copy_only(task):
-    """E27: the form is read from the engine copy (`cards/_TEMPLATE/CARD.md` beside the engine), never from the
-    task's own cards folder, and is never copied into it."""
+    """Checks: the card form is read from the engine, and the task's own cards folder keeps its copy. E27"""
+    # the form is read from the engine copy (cards/_TEMPLATE/CARD.md beside the engine), never from the task's own cards
+    # folder, and is never copied into it.
     planted = task / "mkway" / "cards" / "_TEMPLATE" / "CARD.md"
     planted.parent.mkdir(parents=True)
     planted.write_text("# <ID>: <title>\n\nA changed form.\n", encoding="utf-8")
@@ -85,7 +88,7 @@ def test_card_form_comes_from_the_engine_copy_only(task):
 
 
 def test_card_new_without_prefix_fails(tmp_path):
-    """E28: with no `ids.card_prefix` in the profile, `card new` fails, names the key, and writes nothing."""
+    """Catches: card new with no ids.card_prefix that writes something, or fails without naming the key. E28"""
     root = tmp_path / "task"
     write_profile(root, make_profile())
     proc = _mkway(root, "card", "new", "x")

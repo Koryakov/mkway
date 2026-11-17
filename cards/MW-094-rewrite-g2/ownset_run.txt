@@ -1,0 +1,113 @@
+bringing up nodes...
+bringing up nodes...
+
+........................................................................ [  6%]
+........................................................................ [ 13%]
+........................................................................ [ 20%]
+........................................................................ [ 27%]
+........................................................................ [ 34%]
+........................................................................ [ 41%]
+........................................................................ [ 48%]
+........................................................................ [ 55%]
+........................................................................ [ 62%]
+........................................................................ [ 69%]
+........................................................................ [ 76%]
+........................................................................ [ 83%]
+........................................................................ [ 90%]
+........................................................................ [ 96%]
+................................                                         [100%]
+G8 warnings: 90
+G8 rows file: <work>/mkway-t111\.pytest_tmp\g8_warnings.jsonl
+G8 write tests/shell/test_lock_facts.py::test_a_hold_marker_written_in_the_main_tree_closes_the_hold_in_the_linked_tree <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/main/mkway/state/locks
+G8 write tests/shell/test_lock_facts.py::test_a_hold_marker_written_in_the_main_tree_closes_the_hold_in_the_linked_tree <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/main/mkway/locks
+G8 write tests/shell/test_lock_facts.py::test_a_hold_marker_written_in_the_main_tree_closes_the_hold_in_the_linked_tree <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/linked/mkway/locks
+G8 write tests/shell/test_lock_facts.py::test_a_hold_marker_written_in_the_main_tree_closes_the_hold_in_the_linked_tree <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/linked/mkway/profile.json
+G8 write tests/shell/test_lock_facts.py::test_a_hold_marker_written_in_the_main_tree_closes_the_hold_in_the_linked_tree <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/main/mkway/state
+G8 write tests/shell/test_lock_facts.py::test_a_hold_marker_written_in_the_main_tree_closes_the_hold_in_the_linked_tree <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/main/mkway/state/locks/hold.json
+G8 write tests/shell/test_lock_facts.py::test_a_hold_marker_written_in_the_linked_tree_closes_the_hold_in_the_main_tree <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/main/mkway/state/locks
+G8 write tests/shell/test_lock_facts.py::test_a_hold_marker_written_in_the_linked_tree_closes_the_hold_in_the_main_tree <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/main/mkway/locks
+G8 write tests/shell/test_lock_facts.py::test_a_hold_marker_written_in_the_linked_tree_closes_the_hold_in_the_main_tree <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/linked/mkway/locks
+G8 write tests/shell/test_lock_facts.py::test_a_hold_marker_written_in_the_linked_tree_closes_the_hold_in_the_main_tree <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/linked/mkway/profile.json
+G8 write tests/shell/test_lock_facts.py::test_a_hold_marker_written_in_the_linked_tree_closes_the_hold_in_the_main_tree <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/main/mkway/state/locks/hold.json
+G8 write tests/shell/test_lock_facts.py::test_a_hold_marker_is_written_into_the_shared_folder_and_nowhere_else <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/main/mkway/state/locks
+G8 write tests/shell/test_lock_facts.py::test_a_hold_marker_is_written_into_the_shared_folder_and_nowhere_else <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/main/mkway/locks
+G8 write tests/shell/test_lock_facts.py::test_a_hold_marker_is_written_into_the_shared_folder_and_nowhere_else <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/linked/mkway/locks
+G8 write tests/shell/test_lock_facts.py::test_a_hold_marker_is_written_into_the_shared_folder_and_nowhere_else <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/linked/mkway/profile.json
+G8 write tests/shell/test_lock_facts.py::test_a_hold_marker_is_written_into_the_shared_folder_and_nowhere_else <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/main/mkway/state/locks/hold.json
+G8 write tests/shell/test_lock_facts.py::test_the_owner_go_in_one_tree_lifts_the_hold_in_the_other <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/main/mkway/state/locks
+G8 write tests/shell/test_lock_facts.py::test_the_owner_go_in_one_tree_lifts_the_hold_in_the_other <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/main/mkway/locks
+G8 write tests/shell/test_lock_facts.py::test_the_owner_go_in_one_tree_lifts_the_hold_in_the_other <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/linked/mkway/locks
+G8 write tests/shell/test_lock_facts.py::test_the_owner_go_in_one_tree_lifts_the_hold_in_the_other <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/linked/mkway/profile.json
+G8 write tests/shell/test_lock_facts.py::test_the_owner_go_in_one_tree_lifts_the_hold_in_the_other <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/main/mkway/state/locks/hold.json
+G8 write tests/shell/test_lock_facts.py::test_the_owner_go_in_one_tree_lifts_the_hold_in_the_other <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/linked/mkway/locks/hold.json
+G8 write tests/shell/test_lock_facts.py::test_a_lock_target_opened_in_one_tree_is_open_in_the_other <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/main/mkway/state/locks
+G8 write tests/shell/test_lock_facts.py::test_a_lock_target_opened_in_one_tree_is_open_in_the_other <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/main/mkway/locks
+G8 write tests/shell/test_lock_facts.py::test_a_lock_target_opened_in_one_tree_is_open_in_the_other <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/linked/mkway/locks
+G8 write tests/shell/test_lock_facts.py::test_a_lock_target_opened_in_one_tree_is_open_in_the_other <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/linked/mkway/profile.json
+G8 write tests/shell/test_lock_facts.py::test_a_lock_target_opened_in_one_tree_is_open_in_the_other <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/main/mkway/state/locks/docs.json
+G8 write tests/shell/test_lock_facts.py::test_a_lock_target_opened_in_one_tree_is_open_in_the_other <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/main/mkway/locks/docs.json
+G8 write tests/shell/test_lock_facts.py::test_a_lock_target_closed_in_one_tree_is_closed_in_the_other <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/main/mkway/state/locks
+G8 write tests/shell/test_lock_facts.py::test_a_lock_target_closed_in_one_tree_is_closed_in_the_other <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/main/mkway/locks
+G8 write tests/shell/test_lock_facts.py::test_a_lock_target_closed_in_one_tree_is_closed_in_the_other <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/linked/mkway/locks
+G8 write tests/shell/test_lock_facts.py::test_a_lock_target_closed_in_one_tree_is_closed_in_the_other <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/linked/mkway/profile.json
+G8 write tests/shell/test_lock_facts.py::test_a_lock_target_closed_in_one_tree_is_closed_in_the_other <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/main/mkway/state/locks/docs.json
+G8 write tests/shell/test_lock_facts.py::test_a_lock_target_closed_in_one_tree_is_closed_in_the_other <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/main/mkway/locks/docs.json
+G8 write tests/shell/test_lock_facts.py::test_a_lock_target_closed_in_one_tree_is_closed_in_the_other <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/linked/mkway/locks/docs.json
+G8 write tests/shell/test_lock_facts.py::test_a_tree_whose_profile_has_no_target_of_that_name_ignores_the_marker <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/main/mkway/state/locks
+G8 write tests/shell/test_lock_facts.py::test_a_tree_whose_profile_has_no_target_of_that_name_ignores_the_marker <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/main/mkway/locks
+G8 write tests/shell/test_lock_facts.py::test_a_tree_whose_profile_has_no_target_of_that_name_ignores_the_marker <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/linked/mkway/locks
+G8 write tests/shell/test_lock_facts.py::test_a_tree_whose_profile_has_no_target_of_that_name_ignores_the_marker <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/linked/mkway/profile.json
+G8 write tests/shell/test_lock_facts.py::test_a_tree_whose_profile_has_no_target_of_that_name_ignores_the_marker <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/main/mkway/state/locks/hold.json
+G8 write tests/shell/test_lock_facts.py::test_an_older_local_marker_still_closes_the_hold_in_its_own_tree_only <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/main/mkway/state/locks
+G8 write tests/shell/test_lock_facts.py::test_an_older_local_marker_still_closes_the_hold_in_its_own_tree_only <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/main/mkway/locks
+G8 write tests/shell/test_lock_facts.py::test_an_older_local_marker_still_closes_the_hold_in_its_own_tree_only <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/linked/mkway/locks
+G8 write tests/shell/test_lock_facts.py::test_an_older_local_marker_still_closes_the_hold_in_its_own_tree_only <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/linked/mkway/profile.json
+G8 write tests/shell/test_lock_facts.py::test_an_older_local_marker_still_closes_the_hold_in_its_own_tree_only <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/linked/mkway/locks/hold.json
+G8 write tests/shell/test_lock_facts.py::test_an_older_local_marker_is_named_in_the_listing_and_the_warning <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/main/mkway/state/locks
+G8 write tests/shell/test_lock_facts.py::test_an_older_local_marker_is_named_in_the_listing_and_the_warning <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/main/mkway/locks
+G8 write tests/shell/test_lock_facts.py::test_an_older_local_marker_is_named_in_the_listing_and_the_warning <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/linked/mkway/locks
+G8 write tests/shell/test_lock_facts.py::test_an_older_local_marker_is_named_in_the_listing_and_the_warning <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/linked/mkway/profile.json
+G8 write tests/shell/test_lock_facts.py::test_an_older_local_marker_is_named_in_the_listing_and_the_warning <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/linked/mkway/locks/hold.json
+G8 write tests/shell/test_lock_facts.py::test_closed_wins_when_the_local_marker_is_closed_and_the_shared_one_is_open <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/main/mkway/state/locks
+G8 write tests/shell/test_lock_facts.py::test_closed_wins_when_the_local_marker_is_closed_and_the_shared_one_is_open <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/main/mkway/locks
+G8 write tests/shell/test_lock_facts.py::test_closed_wins_when_the_local_marker_is_closed_and_the_shared_one_is_open <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/linked/mkway/locks
+G8 write tests/shell/test_lock_facts.py::test_closed_wins_when_the_local_marker_is_closed_and_the_shared_one_is_open <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/linked/mkway/profile.json
+G8 write tests/shell/test_lock_facts.py::test_closed_wins_when_the_local_marker_is_closed_and_the_shared_one_is_open <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/main/mkway/state/locks/docs.json
+G8 write tests/shell/test_lock_facts.py::test_closed_wins_when_the_local_marker_is_closed_and_the_shared_one_is_open <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/main/mkway/locks/docs.json
+G8 write tests/shell/test_lock_facts.py::test_closed_wins_when_the_local_marker_is_closed_and_the_shared_one_is_open <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/linked/mkway/locks/docs.json
+G8 write tests/shell/test_lock_facts.py::test_a_local_open_marker_alone_still_opens_the_target <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/main/mkway/state/locks
+G8 write tests/shell/test_lock_facts.py::test_a_local_open_marker_alone_still_opens_the_target <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/main/mkway/locks
+G8 write tests/shell/test_lock_facts.py::test_a_local_open_marker_alone_still_opens_the_target <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/linked/mkway/locks
+G8 write tests/shell/test_lock_facts.py::test_a_local_open_marker_alone_still_opens_the_target <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/linked/mkway/profile.json
+G8 write tests/shell/test_lock_facts.py::test_a_local_open_marker_alone_still_opens_the_target <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/linked/mkway/locks/docs.json
+G8 write tests/shell/test_lock_facts.py::test_the_owner_go_removes_an_older_local_marker <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/main/mkway/state/locks
+G8 write tests/shell/test_lock_facts.py::test_the_owner_go_removes_an_older_local_marker <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/main/mkway/locks
+G8 write tests/shell/test_lock_facts.py::test_the_owner_go_removes_an_older_local_marker <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/linked/mkway/locks
+G8 write tests/shell/test_lock_facts.py::test_the_owner_go_removes_an_older_local_marker <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/linked/mkway/profile.json
+G8 write tests/shell/test_lock_facts.py::test_the_owner_go_removes_an_older_local_marker <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/linked/mkway/locks/hold.json
+G8 write tests/shell/test_lock_facts.py::test_the_owner_go_removes_an_older_local_marker <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/main/mkway/state/locks/hold.json
+G8 write tests/shell/test_lock_facts.py::test_the_lock_list_prints_the_shared_folder_the_hold_and_the_open_lock <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/main/mkway/state/locks
+G8 write tests/shell/test_lock_facts.py::test_the_lock_list_prints_the_shared_folder_the_hold_and_the_open_lock <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/main/mkway/locks
+G8 write tests/shell/test_lock_facts.py::test_the_lock_list_prints_the_shared_folder_the_hold_and_the_open_lock <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/linked/mkway/locks
+G8 write tests/shell/test_lock_facts.py::test_the_lock_list_prints_the_shared_folder_the_hold_and_the_open_lock <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/linked/mkway/profile.json
+G8 write tests/shell/test_lock_facts.py::test_the_lock_list_prints_the_shared_folder_the_hold_and_the_open_lock <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/main/mkway/state/locks/hold.json
+G8 write tests/shell/test_lock_facts.py::test_the_lock_list_prints_the_shared_folder_the_hold_and_the_open_lock <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/main/mkway/state/locks/docs.json
+G8 write tests/shell/test_lock_facts.py::test_the_lock_list_prints_the_shared_folder_the_hold_and_the_open_lock <work>/mkway-t111/.pytest_tmp/popen-gw0/pair0/main/mkway/locks/docs.json
+G8 process tests/test_startline.py::test_start_line_block 
+G8 process tests/test_startline.py::test_drift_three_comparisons_one_warning 
+G8 process tests/test_startline.py::test_user_layer_information_only 
+G8 process tests/test_startline.py::test_start_line_names_invalid_profile 
+G8 process tests/test_startline.py::test_drift_compares_whole_commands 
+G8 process tests/test_startline.py::test_drift_machine_checks_the_interpreter 
+G8 process tests/test_startline.py::test_start_probe_runs_last_and_has_its_own_timeout 
+G8 process tests/test_startline.py::test_probe_stops_an_orphaned_child 
+G8 process tests/test_startline.py::test_drift_compares_on_failure 
+G8 write tests/test_mw062_e2e.py::test_cases_that_appear_with_the_creating_cards_files_are_allowed_through_the_real_hook <work>/mkway-t111/.pytest_tmp/popen-gw0/absent0/repo/task/T1/items
+G8 write tests/test_mw062_e2e.py::test_cases_that_appear_with_the_creating_cards_files_are_allowed_through_the_real_hook <work>/mkway-t111/.pytest_tmp/popen-gw0/absent0/repo/task/T1/items/a.txt
+G8 write tests/test_mw062_e2e.py::test_cases_that_appear_with_the_creating_cards_files_are_allowed_through_the_real_hook <work>/mkway-t111/.pytest_tmp/popen-gw0/absent0/repo/task/T1/items/b.txt
+G8 write tests/test_mw062_e2e.py::test_cases_that_appear_with_the_creating_cards_files_are_allowed_through_the_real_hook <work>/mkway-t111/.pytest_tmp/popen-gw0/absent0/home
+G8 process tests/test_mw062_e2e.py::test_cases_that_appear_with_the_creating_cards_files_are_allowed_through_the_real_hook <work>/mkway-t111/.pytest_tmp/popen-gw0/absent0/repo/task/T1
+G8 write tests/test_mw062_e2e.py::test_cases_that_appear_with_the_creating_cards_files_are_allowed_through_the_real_hook <work>/mkway-t111/.pytest_tmp/popen-gw0/absent0/transcripts/b1.jsonl
+G8 warn rows are fixed by the test-rewrite cards; the switch to raise needs a run with 0 rows
+hermetic seed: 1794565960
+1040 passed in 53.40s

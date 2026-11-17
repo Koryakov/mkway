@@ -1,0 +1,126 @@
+# MW-067 case map: every old test of the install family, and where its case went
+
+# Form: `old_file::old_test -> new_file::new_test` (the main new home; a `#` line names the others an old test was split
+# into), or `-> dropped: doc` (README, CHANGELOG, VERSION or card text), or `-> dropped: T<n> <reason>`. A case with no
+# line here stays where it is: `test_install.py::test_check_lists_and_pins_the_term_scan_exceptions`,
+# `test_install.py::test_fixed_set_is_nda_clean`, `test_install.py::test_install_writes_the_machine_interpreter`,
+# `test_install.py::test_profile_arg_install_has_no_false_drift` (the start line's drift), `test_mw004_install.py::test_a_real_install_records_an_agent`,
+# `test_mw016_version.py::test_the_start_block_shows_the_copys_version`, `test_mw025_copy_check.py::test_the_eight_tests_that_read_engine_repository_files_are_marked`,
+# `test_mw027_install_commit.py` (`first_add_is_clean`, `settings_files_are_protected_paths`, `fresh_worktree`),
+# `test_mw030_live_install.py` (the live release gate, but its doc row), `test_mw035_install_line.py::test_the_message_prefix_key_is_in_the_schema_and_keys`.
+# `test_mw004_agents.py` and `test_mw004_cap.py` test the agent record gate, not install: another family.
+
+
+# test_install.py
+tests/test_install.py::test_install_copies_the_fixed_set_and_writes_the_lock -> tests/shell/test_install_facts.py::test_the_copy_holds_the_files_the_source_tracks
+# split into: test_an_untracked_source_file_is_not_copied, test_the_lock_names_the_tag_as_the_version, test_the_lock_names_the_source_commit,
+# test_the_lock_hash_is_the_hash_of_the_copy_on_disk, test_the_lock_has_exactly_the_five_keys, the plain-folder tests, and core test_a_set_file_is_copied
+tests/test_install.py::test_install_creates_folders_starter_profile_and_ignore_lines -> tests/shell/test_install_facts.py::test_the_starter_profile_says_git_and_the_default_folders
+# split into: test_install_creates_the_bundle_folders, test_git_ignores_the_runtime_files, test_the_vcs_none_profile_says_none, and core test_no_profile_gives_the_starter_with_the_card_prefix_and_no_path, test_an_existing_valid_profile_stays_as_it_is
+tests/test_install.py::test_hook_entries_generated_and_other_keys_kept -> tests/core/test_install_decide.py::test_other_keys_keep_their_bytes_and_a_foreign_hook_stays
+# split into: the core entry tests (union matcher, timeout sum, budget, on_failure), test_a_second_write_changes_nothing, test_a_group_carries_only_documented_fields
+tests/test_install.py::test_cards_and_ledger_are_tracked -> tests/shell/test_install_facts.py::test_git_does_not_ignore_what_the_task_tracks
+# split into: test_the_bundle_ignore_file_names_the_runtime_lines_only, test_git_ignores_the_runtime_files
+tests/test_install.py::test_install_names_old_ignore_lines_for_cards_and_ledger -> tests/core/test_install_decide.py::test_an_earlier_installs_cards_and_ledger_lines_are_named_not_removed
+# the real command: tests/shell/test_install_facts.py::test_an_earlier_cards_and_ledger_ignore_line_is_named_not_removed
+tests/test_install.py::test_timeout_floor_is_10_seconds -> tests/core/test_install_decide.py::test_the_timeout_is_never_under_ten_seconds
+tests/test_install.py::test_install_refuses_a_python_that_is_not_an_interpreter -> tests/core/test_install_decide.py::test_an_interpreter_text_with_a_shell_character_or_a_stray_flag_is_invalid
+# split into: the core interpreter tables, and shell test_a_python_with_a_shell_character_is_refused_and_nothing_is_written, test_a_program_that_is_not_a_python_is_refused,
+# test_a_python_older_than_3_9_is_refused, test_a_program_that_does_not_exist_is_refused, test_python_3_9_is_accepted, test_the_launcher_with_a_minor_version_flag_is_accepted
+tests/test_install.py::test_install_never_touches_the_home_folder -> tests/shell/test_install_facts.py::test_install_leaves_the_home_folder_alone
+# its second assert read the source text of install.py for a word (T4: a text check, not a behaviour): dropped with the grep, the behaviour is kept
+tests/test_install.py::test_check_compares_hash_runs_tests_and_skips_scan -> tests/shell/test_install_facts.py::test_check_runs_exactly_the_copys_one_test
+# split into: test_check_of_a_fresh_install_exits_zero, test_check_says_the_hash_matches_the_lock, test_check_without_a_term_file_says_the_scan_was_skipped,
+# test_check_with_one_changed_byte_fails_and_names_the_fix, and core test_a_matching_hash_passes_the_check, test_a_changed_copy_fails_the_check_and_names_the_fix
+tests/test_install.py::test_install_refuses_a_profile_outside_the_root -> tests/shell/test_install_facts.py::test_a_profile_outside_the_root_is_refused_before_any_write
+# core: test_a_profile_outside_the_root_is_refused, test_a_profile_inside_the_root_is_allowed
+tests/test_install.py::test_install_refuses_links_out_of_the_root -> tests/shell/test_install_facts.py::test_a_bundle_that_is_a_link_out_of_the_root_is_refused
+# and tests/shell/test_install_facts.py::test_an_engine_copy_that_is_a_link_out_of_the_root_is_not_replaced; core: test_a_bundle_that_leads_outside_the_root_is_refused_by_name
+tests/test_install.py::test_check_with_a_missing_term_file_says_so -> tests/shell/test_install_facts.py::test_check_with_a_missing_term_file_fails_with_a_clean_line
+tests/test_install.py::test_install_says_when_git_cannot_check_the_ignore -> tests/shell/test_install_facts.py::test_a_profile_that_says_git_in_a_folder_with_no_work_tree_still_installs
+tests/test_install.py::test_check_runs_the_term_scan_when_a_term_file_is_set -> tests/shell/test_install_facts.py::test_check_with_a_term_file_reports_the_counts
+# T8: the old test failed unless the owner's real term list sat in the environment (a hidden dependence on env); the new one writes a synthetic term file
+
+# test_install_seal.py
+tests/test_install_seal.py::test_install_writes_gitattributes_and_seals_only_the_head_register -> tests/shell/test_install_facts.py::test_install_does_not_seal_a_register_that_differs_from_head
+# split into: test_install_seals_a_register_that_equals_the_head_blob, test_install_keeps_the_other_lines_of_the_attributes_file
+tests/test_install_seal.py::test_install_without_git_seals_the_current_register -> tests/shell/test_install_facts.py::test_install_without_git_seals_the_register_as_it_is
+
+# test_mw004_install.py, test_mw004_readme.py
+tests/test_mw004_install.py::test_generate_entries_has_both_agent_events -> tests/core/test_install_decide.py::test_each_agent_event_has_a_whole_entry_with_no_matcher_and_no_block
+# and test_the_agent_events_come_after_post_tool_use_and_before_stop; the old test pinned the whole entry list of the engine's own manifest (T1: it changed with every gate), the new rows use a synthetic manifest
+tests/test_mw004_install.py::test_the_gate_switch_drops_both_entries -> tests/core/test_install_decide.py::test_the_gate_switch_drops_that_agent_entry_and_no_other
+tests/test_mw004_install.py::test_settings_hold_the_agent_entries_once -> tests/core/test_install_decide.py::test_a_foreign_hook_under_the_same_event_is_kept_beside_the_owned_one
+# and test_a_second_write_changes_nothing
+tests/test_mw004_readme.py::test_readme_has_a_short_agent_records_section -> dropped: doc
+
+# test_mw016_version.py
+tests/test_mw016_version.py::test_the_version_file_is_semver -> dropped: doc
+tests/test_mw016_version.py::test_the_lock_carries_the_version -> tests/core/test_install_decide.py::test_the_lock_names_version_semver_sha_date_and_hash_and_no_path
+# and tests/shell/test_install_facts.py::test_the_lock_holds_the_semver_of_the_sources_version_file
+tests/test_mw016_version.py::test_check_warns_on_a_missing_or_a_different_tag -> tests/shell/test_install_facts.py::test_the_tag_line_reads_the_tags_at_head
+# split into: test_the_tag_line_writes_no_tag, test_a_root_without_a_version_file_has_no_tag_line, test_in_a_claude_chat_the_tag_line_does_not_read_git, and the core version_tag_line tables
+tests/test_mw016_version.py::test_check_prints_the_tag_line -> tests/shell/test_install_facts.py::test_check_prints_the_tag_warning_for_a_task_with_a_version_file
+# test_the_changelog_covers_the_register and test_the_readme_has_the_versioning_section stay: the MW-025 marker test and the MW-029 guard test use them as samples
+
+# test_mw025_copy_check.py
+tests/test_mw025_copy_check.py::test_check_names_the_failing_tests_not_only_the_count -> tests/shell/test_install_facts.py::test_check_names_the_tests_of_the_copy_that_fail
+tests/test_mw025_copy_check.py::test_check_names_at_most_ten_failing_tests -> tests/core/test_install_decide.py::test_twelve_failures_name_ten_and_count_the_rest
+tests/test_mw025_copy_check.py::test_register_changelog_version_and_card_name_the_card -> dropped: doc
+
+# test_mw027_install_commit.py
+tests/test_mw027_install_commit.py::test_install_writes_the_bundle_gitignore_with_vcs_none_too -> tests/shell/test_install_facts.py::test_the_bundle_ignore_file_is_written_whatever_the_profiles_vcs
+tests/test_mw027_install_commit.py::test_hook_entries_go_into_the_committed_settings_json -> tests/core/test_install_decide.py::test_a_second_write_changes_nothing
+# and tests/shell/test_install_facts.py::test_the_committed_settings_hold_each_owned_command_once, test_no_local_settings_file_is_written
+tests/test_mw027_install_commit.py::test_a_reinstall_strips_mkways_entries_from_settings_local_json -> tests/core/test_install_decide.py::test_no_entries_strips_the_owned_ones_and_keeps_the_owners
+tests/test_mw027_install_commit.py::test_install_prints_the_two_commit_lines -> tests/shell/test_install_facts.py::test_the_last_line_is_the_one_commit_line_with_the_root_and_the_first_runs_paths
+# and test_a_vcs_none_install_prints_no_commit_line, and core test_the_printed_line_is_one_line_with_the_root_in_both_commands
+tests/test_mw027_install_commit.py::test_install_commit_runs_the_two_lines_in_the_owners_terminal_only -> tests/shell/test_install_facts.py::test_install_commit_has_the_message_and_leaves_the_tree_clean
+# split into: test_install_commit_in_a_claude_chat_is_refused_and_commits_nothing, test_install_commit_with_vcs_none_is_refused, and core test_commit_without_git_is_refused
+tests/test_mw027_install_commit.py::test_the_engine_copy_is_never_converted_by_git -> tests/shell/test_install_facts.py::test_the_engine_copy_is_never_converted_by_git
+tests/test_mw027_install_commit.py::test_an_older_ignore_line_for_the_engine_copy_is_reported -> tests/shell/test_install_facts.py::test_a_stale_engine_ignore_line_is_removed_and_the_copy_is_then_tracked
+tests/test_mw027_install_commit.py::test_readme_use_in_a_task_has_five_lines_and_no_ignored_settings_claim -> dropped: doc
+tests/test_mw027_install_commit.py::test_register_changelog_and_version_name_the_card -> dropped: doc
+
+# test_mw030_live_install.py
+tests/test_mw030_live_install.py::test_register_changelog_and_card_name_the_card -> dropped: doc
+
+# test_mw032_reinstall_safe.py
+tests/test_mw032_reinstall_safe.py::test_check_leaves_nothing_in_the_copy -> tests/shell/test_install_facts.py::test_check_leaves_the_copy_as_it_found_it
+tests/test_mw032_reinstall_safe.py::test_check_scratch_lives_under_the_state_folder -> tests/shell/test_install_facts.py::test_the_scratch_of_the_copys_tests_lives_under_the_state_folder
+tests/test_mw032_reinstall_safe.py::test_reinstall_after_check_succeeds -> tests/shell/test_install_facts.py::test_a_reinstall_leaves_the_lock_matching_the_copy_and_one_engine_folder
+tests/test_mw032_reinstall_safe.py::test_reinstall_over_a_read_only_scratch_file_succeeds -> tests/shell/test_install_facts.py::test_a_reinstall_replaces_a_copy_that_holds_a_read_only_file
+tests/test_mw032_reinstall_safe.py::test_a_failed_removal_leaves_the_new_copy_and_names_the_leftover -> tests/shell/test_install_facts.py::test_a_failed_removal_leaves_the_new_copy_and_names_the_leftover
+tests/test_mw032_reinstall_safe.py::test_a_failed_swap_leaves_the_old_copy_working -> tests/shell/test_install_facts.py::test_a_failed_swap_puts_the_old_copy_back_and_refuses_in_one_line
+tests/test_mw032_reinstall_safe.py::test_register_changelog_and_card_name_the_card -> dropped: doc
+
+# test_mw035_install_line.py
+tests/test_mw035_install_line.py::test_a_stale_engine_ignore_line_is_removed_and_the_others_stay -> tests/core/test_install_decide.py::test_the_stale_engine_line_goes_and_lookalikes_stay
+# and tests/shell/test_install_facts.py::test_a_stale_engine_ignore_line_is_removed_and_the_copy_is_then_tracked
+tests/test_mw035_install_line.py::test_install_commit_takes_only_its_own_paths -> tests/shell/test_install_facts.py::test_install_commit_takes_only_install_paths_and_leaves_a_staged_file
+tests/test_mw035_install_line.py::test_the_printed_commit_step_is_one_line_without_a_leading_space -> tests/shell/test_install_facts.py::test_no_printed_line_starts_with_a_space
+# and test_the_last_line_is_the_one_commit_line_with_the_root_and_the_first_runs_paths
+tests/test_mw035_install_line.py::test_the_message_prefix_starts_the_install_message -> tests/shell/test_install_facts.py::test_the_message_prefix_starts_the_commit_message
+# and core test_the_install_message_starts_with_the_prefix_when_set, test_the_printed_line_carries_the_message_prefix
+tests/test_mw035_install_line.py::test_readme_register_changelog_and_card_name_the_card -> dropped: doc
+
+# test_mw036_install_own_paths.py
+tests/test_mw036_install_own_paths.py::test_install_commit_leaves_session_files_of_the_bundle_out -> tests/shell/test_install_facts.py::test_a_reinstall_commit_leaves_the_session_files_of_the_bundle_out
+tests/test_mw036_install_own_paths.py::test_the_printed_line_names_only_installs_paths -> tests/core/test_install_decide.py::test_the_install_paths_of_a_reinstall_leave_the_profile_out
+# and test_the_install_paths_of_a_first_run_end_with_the_profile, test_the_install_paths_never_name_the_bundle_folder
+tests/test_mw036_install_own_paths.py::test_readme_register_changelog_and_card_name_the_card -> dropped: doc
+
+# test_mw041_install_line_root.py
+tests/test_mw041_install_line_root.py::test_the_printed_line_commits_install_paths_from_another_folder -> tests/shell/test_install_facts.py::test_the_printed_line_commits_install_paths_when_run_from_another_folder
+tests/test_mw041_install_line_root.py::test_the_printed_line_works_when_the_root_holds_a_space -> tests/shell/test_install_facts.py::test_the_printed_line_commits_when_the_root_holds_a_space
+tests/test_mw041_install_line_root.py::test_a_crlf_ignore_file_loses_the_engine_line_and_keeps_its_line_ends -> tests/core/test_install_decide.py::test_a_crlf_file_loses_the_engine_line_and_keeps_every_crlf
+tests/test_mw041_install_line_root.py::test_the_other_spellings_of_the_engine_line_are_removed -> tests/core/test_install_decide.py::test_every_crlf_spelling_of_the_engine_line_is_removed_and_the_file_stays_crlf
+# and test_every_lf_spelling_of_the_engine_line_is_removed_and_the_file_stays_lf
+tests/test_mw041_install_line_root.py::test_readme_register_changelog_and_card_name_the_card -> dropped: doc
+
+# test_mw051_copy_hash_once.py
+tests/test_mw051_copy_hash_once.py::test_install_records_the_hash_of_the_disk_without_a_second_read -> tests/shell/test_install_facts.py::test_install_records_the_hash_of_the_disk_without_reading_the_copy_back
+tests/test_mw051_copy_hash_once.py::test_a_reinstall_records_the_hash_of_the_disk_without_a_second_read -> tests/shell/test_install_facts.py::test_a_reinstall_from_a_changed_source_records_the_new_disk_hash
+tests/test_mw051_copy_hash_once.py::test_a_copy_with_crlf_files_records_the_hash_of_the_disk -> tests/shell/test_install_facts.py::test_a_copy_with_crlf_files_records_the_hash_of_those_bytes
+tests/test_mw051_copy_hash_once.py::test_check_still_reads_the_copy_and_sees_a_changed_file -> tests/shell/test_install_facts.py::test_check_with_one_changed_byte_fails_and_names_the_fix
+tests/test_mw051_copy_hash_once.py::test_register_changelog_and_card_name_the_card -> dropped: doc

@@ -5,6 +5,7 @@ import re
 
 import pytest
 
+import _docs as docs
 from _engine import REPO
 import helpers
 import install
@@ -27,52 +28,65 @@ def _git_says(names):
 
 
 def test_the_list_holds_the_names_this_git_added_and_keeps_the_old_one():
-    """E1: the list is the union of the old list and this git's built-ins minus the internal helper `env--helper`
-    (a name only in the list is the risky side): the five new names are in, `env--helper` is out, no name twice."""
+    """Checks: the list holds the names this git added, leaves out the internal helper, and names each command once. E1"""
+    # the list is the union of the old list and this git's built-ins minus the internal helper env--helper (a name only in
+    # the list is the risky side): the five new names are in, env--helper is out, no name twice.
     names = _list()
-    for name in NEW_IN_GIT + ["commit"]:
-        assert name in names, name
+    missing = [name for name in NEW_IN_GIT + ["commit"] if name not in names]
+    assert missing == [], missing
     assert "env--helper" not in names
     assert len(names) == len(set(names))
 
 
 def test_a_name_only_in_the_list_warns_and_the_fix_is_to_update_mkway(tmp_path):
-    """E2: git's output lacks one name of the list: a warning that names it (the gate would trust it as a built-in
-    although git may run an alias or an external command); the fix is to update mkway, not a profile key."""
+    """Checks: a name only in the list is reported as a warning that names it and says to update mkway, not a profile key. E2"""
+    # git's output lacks one name of the list: a warning that names it (the gate would trust it as a built-in although git
+    # may run an alias or an external command); the fix is to update mkway, not a profile key.
     names = _list()
     line = install.git_builtins_line(tmp_path, run=_git_says([n for n in names if n != "tag"]))
     assert line.startswith("git builtins: warning"), line
-    assert "tag" in line and "update mkway" in line, line
-    assert "git_builtins_extra" not in line and "engine/defaults.json" not in line, line
+    assert "tag" in line
+    assert "update mkway" in line, line
+    assert "git_builtins_extra" not in line, line
+    assert "engine/defaults.json" not in line, line
     same = install.git_builtins_line(tmp_path, run=_git_says(names))
-    assert "warning" not in same and "info" not in same, same
+    assert "warning" not in same, same
+    assert "info" not in same, same
 
 
 def test_a_name_only_in_git_is_info_and_names_the_profile_key(tmp_path):
-    """E3: git has one name the list lacks (an over-refusal, the safe side): no warning; an info part names the name
-    and the profile key `lock_gate.git_builtins_extra`, never an engine file."""
+    """Checks: a name only in git is an info line, not a warning, and it names the profile key and no engine file. E3"""
+    # git has one name the list lacks (an over-refusal, the safe side): no warning; an info part names the name and the
+    # profile key lock_gate.git_builtins_extra, never an engine file.
     line = install.git_builtins_line(tmp_path, run=_git_says(_list() + ["zz-new"]))
     assert "warning" not in line, line
-    assert "info" in line and "zz-new" in line and "lock_gate.git_builtins_extra" in line, line
-    assert "engine/defaults.json" not in line and "engine file" not in line, line
+    assert "info" in line, line
+    assert "zz-new" in line, line
+    assert "lock_gate.git_builtins_extra" in line, line
+    assert "engine/defaults.json" not in line, line
+    assert "engine file" not in line, line
 
 
 def test_the_profile_key_extends_the_list_for_the_check_and_the_gate(tmp_path):
-    """E4: a name in the profile key is known to the check (the line matches, no info) and to the git form reader
-    (no `command-unparsed`); without the key the reader still objects; an unusable value counts as no key."""
+    """Checks: the profile key extends the list for the check and the git form reader, and an unusable value counts as no key. E4"""
+    # a name in the profile key is known to the check (the line matches, no info) and to the git form reader (no
+    # command-unparsed); without the key the reader still objects; an unusable value counts as no key.
     out = _git_says(_list() + ["zz-new"])
     assert install.git_builtins_line(tmp_path, run=out, extra={"zz-new"}).startswith("git builtins: the engine list")
     assert "info" not in install.git_builtins_line(tmp_path, run=out, extra={"zz-new"})
     assert helpers.git_form_problem("git zz-new status") is not None
     assert helpers.git_form_problem("git zz-new status", "bash", extra={"zz-new"}) is None
     assert profiles.git_builtins_extra({"lock_gate": {"git_builtins_extra": ["zz-new"]}}) == {"zz-new"}
-    for bad in ({}, {"lock_gate": {}}, {"lock_gate": {"git_builtins_extra": ["zz-new", 5]}},
-                {"lock_gate": {"git_builtins_extra": "zz-new"}}, None):
-        assert profiles.git_builtins_extra(bad) == set(), bad
+    unusable = [(bad, profiles.git_builtins_extra(bad)) for bad in
+                ({}, {"lock_gate": {}}, {"lock_gate": {"git_builtins_extra": ["zz-new", 5]}},
+                 {"lock_gate": {"git_builtins_extra": "zz-new"}}, None)]
+    problems = [(bad, got) for bad, got in unusable if got != set()]
+    assert problems == [], problems
 
 
 def test_the_schema_accepts_the_key_and_refuses_a_wrong_type():
-    """E5: `lock_gate.git_builtins_extra` is an array of names in the profile schema."""
+    """Catches: a wrong type for the key accepted by the schema. E5"""
+    # lock_gate.git_builtins_extra is an array of names in the profile schema.
     good = dict(BASE, lock_gate={"git_builtins_extra": ["zz-new"]})
     assert profiles.validate(good) == []
     bad = dict(BASE, lock_gate={"git_builtins_extra": "zz-new"})
@@ -80,29 +94,31 @@ def test_the_schema_accepts_the_key_and_refuses_a_wrong_type():
 
 
 def test_the_list_gives_this_machine_no_warning(tmp_path):
-    """E8: git's built-ins of this machine as the order names them (the old list minus `env--helper`, plus the five
-    new names) equal the list: the line is the plain match."""
+    """Checks: git's built-ins of this machine as the order names them equal the list, so the line is the plain match. E8"""
+    # the old list minus env--helper, plus the five new names, equal the list.
     names = _list()
     line = install.git_builtins_line(tmp_path, run=_git_says(names))
     assert line == f"git builtins: the engine list matches git ({len(names)} commands)", line
 
 
 def test_keys_md_names_the_key_and_the_direction():
-    """E6: KEYS.md has an added-keys row for the profile key, and the engine-constant row no longer says the list
-    was written from knowledge alone."""
+    """Checks: KEYS.md has a row for the profile key, and the engine-constant row no longer says the list is unverified. E6"""
+    # KEYS.md has an added-keys row for the profile key, and the engine-constant row no longer says the list was written
+    # from knowledge alone.
     text = (REPO / "engine" / "KEYS.md").read_text(encoding="utf-8")
     assert re.search(r"^\| `lock_gate\.git_builtins_extra` \| in schema now \| `lock_gate\.git_builtins_extra` \|",
                      text, re.M)
     row = next(r for r in text.splitlines() if r.startswith("| `lock_gate` | `git_builtins` |"))
-    assert "MW-031" in row and "unverified" not in row
+    assert "MW-031" in row
+    assert "unverified" not in row
 
 
 def test_register_changelog_and_card_name_the_card():
-    """E7: the register row, a line under the top changelog section, the card folder; VERSION is untouched."""
+    """Checks: the register row, a line under the top changelog section and the card folder exist, and VERSION is untouched. E7"""
     register = (REPO / "cards" / "REGISTER.md").read_text(encoding="utf-8")
     assert re.search(r"^\| MW-031 \| .*\|.*`cards/MW-031-[a-z0-9-]+`", register, re.M)
     changelog = (REPO / "CHANGELOG.md").read_text(encoding="utf-8")
-    top = changelog.split("\n## 0.2.6\n", 1)[1].split("\n## ", 1)[0]
+    top = docs.changelog_section(changelog, "MW-031")
     assert re.search(r"^- MW-031: ", top, re.M)
     assert list((REPO / "cards").glob("MW-031-*/CARD.md"))
-    assert (REPO / "VERSION").read_text(encoding="utf-8").strip() == "0.2.7"  # changed by MW-027: 0.2.7
+    docs.assert_version_file()

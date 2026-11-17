@@ -74,10 +74,11 @@ def test_install_checks_the_starter_profile_before_it_is_written(tmp_path, monke
     is refused with the key path and the message, and no profile file is written. Catches: install writing a profile
     the dispatcher then refuses on every call."""
     import install
+    import core_install  # decision MW-067: plan_profile moved to core_install and reads its own starter_profile
     from test_install import make_source, make_task
     src = make_source(tmp_path, vcs="none")
     root = make_task(tmp_path, vcs="none")
-    monkeypatch.setattr(install, "starter_profile", lambda vcs: dict(make_profile(), vcs="bogus"))
+    monkeypatch.setattr(core_install, "starter_profile", lambda vcs: dict(make_profile(), vcs="bogus"))
     with pytest.raises(install.InstallError) as caught:
         install.install(root, src)
     assert "vcs: not one of git, none" in str(caught.value)
@@ -96,82 +97,7 @@ def test_check_prints_the_profile_error(task):
     assert any(line.startswith("profile: invalid") and BUNDLE_ERROR in line for line in lines)
 
 
-def test_a_write_that_holds_a_lock_target_is_refused(gtask):
-    """Item 2 (R37 (a) H2): a written or deleted path that holds a closed lock target (a parent folder, the root) is
-    refused `lock-closed-shell`, for a literal entry by its text and for a glob entry by its prefix or by a matching
-    file on disk; a folder that holds none passes. Catches: `rm -rf mkway` or `mv mkway old` passing because the
-    folder itself is not inside a target."""
-    _set_profile(gtask, locks={"targets": [{"name": "docs", "paths": ["docs/**/*.md"]},
-                                           {"name": "seeds", "paths": ["*.seed"]}]})
-    for folder, name in (("data", "x.seed"), ("other", "y.txt")):
-        (gtask / folder).mkdir()
-        (gtask / folder / name).write_text("x\n", encoding="utf-8")
-    rows = [
-        ("rm -rf mkway", "bash", "lock-closed-shell"),
-        ("rm -rf .", "bash", "lock-closed-shell"),
-        ("mv mkway old", "bash", "lock-closed-shell"),
-        ("rm -r mkway/cards", "bash", "lock-closed-shell"),  # holds the register
-        ("Remove-Item -Recurse mkway", "powershell", "lock-closed-shell"),
-        ("rm -rf docs", "bash", "lock-closed-shell"),  # the glob's literal folder
-        ("rm -rf data", "bash", "lock-closed-shell"),  # data/x.seed matches the slash-free glob
-        ("rm -rf mkway/cards/CARD-001-first", "bash", "allow"),
-        ("rm -rf other", "bash", "allow"),
-        ("rm -rf src", "bash", "allow"),
-    ]
-    for command, sh, want in rows:
-        v = shell(gtask, command, tool="PowerShell" if sh == "powershell" else "Bash")
-        assert _reason(v) == want, command
-    assert "'docs'" in shell(gtask, "rm -rf docs").message
-    assert "data/x.seed" in shell(gtask, "rm -rf data").message
-
-
 C = "git commit -m 'CARD-001 x' -- "
-
-
-def test_commit_pathspecs_are_checked_per_file(gtask):
-    """Item 2 (R37 (a) H2): a commit pathspec (a folder, `.`, a glob, `:(glob)` magic, from `-C`) is expanded to the
-    files the commit takes, the changed tracked files it matches, and each is checked; an unchanged target under a
-    folder pathspec does not count; the register under a folder pathspec still meets its seal; a pathspec git
-    refuses to expand refuses. Catches: `git commit -- mkway` committing a changed profile because the folder name
-    is not itself a target."""
-    (gtask / "src").mkdir()
-    (gtask / "src" / "a.py").write_text("x = 1\n", encoding="utf-8")
-    _git(gtask, "add", "src/a.py")
-    _git(gtask, "commit", "-q", "-m", "base")
-    (gtask / "src" / "a.py").write_text("x = 2\n", encoding="utf-8")
-    pfile = gtask / "mkway" / "profile.json"
-    good = pfile.read_bytes()
-    pfile.write_bytes(good + b"\n")
-    for command in (C + "mkway", C + ".", C + "'mkway/*.json'", C + "':(glob)mkway/**'",
-                    "git -C mkway commit -m 'CARD-001 x' -- ."):
-        v = shell(gtask, command)
-        assert _reason(v) == "lock-closed-commit" and "mkway/profile.json" in v.message, command
-    assert _reason(shell(gtask, C + "src")) == "allow"
-    assert _reason(shell(gtask, C + "src/a.py")) == "allow"
-    pfile.write_bytes(good)
-    assert _reason(shell(gtask, C + ".")) == "allow"
-    assert _reason(shell(gtask, C + "mkway")) == "allow"
-    reg = gtask / "mkway" / "cards" / "REGISTER.md"
-    reg_good = reg.read_bytes()
-    reg.write_bytes(reg_good.replace(b"proposed", b"open", 1))
-    v = shell(gtask, C + "mkway/cards")
-    assert _reason(v) == "lock-closed-commit" and "differs from its seal" in v.message
-    reg.write_bytes(reg_good)
-    v = shell(gtask, C + "':(bogus)x'")
-    assert _reason(v) == "lock-closed-commit" and "could not" in v.message
-
-
-def test_first_commit_pathspecs_are_checked_per_file(tmp_path):
-    """Item 2 (R37 (a) H2): before the first commit there is no HEAD, so the pathspec is expanded over the index;
-    a staged target under `.` refuses. Catches: an expansion that fails open when HEAD is missing."""
-    root = task_root(tmp_path, vcs="git", name="fresh")
-    (root / "mkway" / ".gitignore").write_text("engine/\nlocks/\nstate/\n", encoding="utf-8")
-    _git(root, "init", "-q")
-    assert cli(root, "card", "new", "First")[0] == 0
-    _git(root, "add", "-A")
-    v = shell(root, C + ".")
-    assert _reason(v) == "lock-closed-commit" and "mkway/.gitignore" in v.message  # the index's first staged target
-    assert _reason(shell(root, C + "src")) == "allow"
 
 
 REG = "mkway/cards/REGISTER.md"
@@ -190,29 +116,6 @@ def _root_below_top(tmp_path):
     return root
 
 
-def test_staged_register_is_read_from_the_root_folder(tmp_path):
-    """Item 3 (R37 (a) M2): with `-i` the staged register is read as `:./<rel>` from the root, so a root below its
-    git top finds it; a staged forgery behind a restored working tree refuses there too. Catches: `:<rel>` read from
-    the git top, which names no file, so the check passes."""
-    root = _root_below_top(tmp_path)
-    good = (root / REG).read_bytes()
-    (root / REG).write_bytes(good.replace(b"proposed", b"open", 1))
-    _git(root, "add", REG)
-    (root / REG).write_bytes(good)
-    v = shell(root, "git commit -i -m 'CARD-001 x' -- " + REG)
-    assert _reason(v) == "lock-closed-commit" and "staged" in v.message
-    _git(root, "reset", "-q", "--", REG)
-    assert _reason(shell(root, "git commit -i -m 'CARD-001 x' -- " + REG)) == "allow"
-
-
-def test_staged_register_read_failure_refuses(gtask):
-    """Item 3 (R37 (a) M2): when git cannot read the staged register (exit not 0, here: not in the index), the `-i`
-    commit is refused, never passed. Catches: a staged check that fails open."""
-    _git(gtask, "rm", "-q", "--cached", REG)
-    v = shell(gtask, "git commit -i -m 'CARD-001 x' -- " + REG)
-    assert _reason(v) == "lock-closed-commit" and "could not" in v.message
-
-
 def test_install_seal_reads_head_from_the_root_folder(tmp_path):
     """Item 3 (R37 (a) M2): install's seal compares the register with `HEAD:./<rel>`, read from the root, so a root
     below its git top is sealed when the register equals HEAD's blob. Catches: `HEAD:<rel>` read from the git top,
@@ -226,48 +129,6 @@ def test_install_seal_reads_head_from_the_root_folder(tmp_path):
     sha.unlink()
     report = install.install(root, src, vcs="git")
     assert "register: sealed" in report and sha.is_file()
-
-
-def test_commit_from_the_index_checks_what_it_takes(gtask):
-    """Item 16 (R68). The hole: `git add mkway/profile.json`, then `git commit -m x` passed the lock gate, which read
-    only pathspecs and, with `-i`, the staged names. Now a commit with no pathspec or with `--amend` checks the staged
-    names, and `-a` the staged names plus the tracked changes; the refusal names the locked path and the session's
-    own step, nothing owner-side. Must-pass rows first: a bare commit with no locked file staged, and `-a` with no
-    locked tracked change, pass."""
-    (gtask / "src").mkdir()
-    (gtask / "src" / "a.py").write_text("x = 1\n", encoding="utf-8")
-    _git(gtask, "add", "src/a.py")
-    _git(gtask, "commit", "-q", "-m", "base")
-    (gtask / "src" / "a.py").write_text("x = 2\n", encoding="utf-8")
-    _git(gtask, "add", "src/a.py")
-    bare, every = "git commit -m 'CARD-001 x'", "git commit -a -m 'CARD-001 x'"
-    assert _reason(shell(gtask, bare)) == "allow"
-    assert _reason(shell(gtask, every)) == "allow"
-    pfile = gtask / "mkway" / "profile.json"
-    pfile.write_bytes(pfile.read_bytes() + b"\n")
-    assert _reason(shell(gtask, bare)) == "allow"  # changed, not staged: a bare commit does not take it
-    v = shell(gtask, every)
-    assert _reason(v) == "lock-closed-commit" and "mkway/profile.json" in v.message and "-a" in v.message
-    _git(gtask, "add", "mkway/profile.json")
-    for command in (bare, "git commit --amend -m 'CARD-001 x'", "git commit --amend -m 'CARD-001 x' -- src/a.py",
-                    every):
-        v = shell(gtask, command)
-        assert _reason(v) == "lock-closed-commit" and "mkway/profile.json" in v.message, command
-        assert "owner" not in v.message, command
-    assert "git restore --staged mkway/profile.json" in shell(gtask, bare).message
-
-
-def test_first_commit_from_the_index_checks_what_it_takes(tmp_path):
-    """Item 16 (R68): before the first commit there is no HEAD; a bare commit and `-a` still check the staged
-    names. Catches: a check that fails open when HEAD is missing."""
-    root = task_root(tmp_path, vcs="git", name="fresh")
-    (root / "mkway" / ".gitignore").write_text("engine/\nlocks/\nstate/\n", encoding="utf-8")
-    _git(root, "init", "-q")
-    assert cli(root, "card", "new", "First")[0] == 0
-    _git(root, "add", "-A")
-    for command in ("git commit -m 'CARD-001 x'", "git commit -a -m 'CARD-001 x'"):
-        v = shell(root, command)
-        assert _reason(v) == "lock-closed-commit" and "mkway/.gitignore" in v.message, command
 
 
 def test_everywhere_carries_a_reason():
@@ -286,36 +147,6 @@ def _kind(v):
     return v.reason_id if v.kind == "refuse" else v.kind
 
 
-LOCK_ROWS = [  # (command, the verdict: a refuse reason, `log` or `allow`, what the message must quote)
-    # (a) a parsed write path into a closed target, or a glob whose literal folder holds one
-    ("echo x > mkway/profile.json", "lock-closed-shell", "mkway/profile.json"),
-    ("rm -rf mkway/*", "lock-closed-shell", "mkway"),
-    # (b) everywhere, and the text names a closed target literally (its path, or its base name in a path position)
-    ('python -c "import subprocess; subprocess.run([1, \'mkway/profile.json\'])"', "lock-closed-shell", "capable"),
-    ("X=mkway; rm -rf $X/engine", "lock-closed-shell", "engine"),
-    ('echo "x > mkway/mkway.lock', "lock-closed-shell", "unparsed"),
-    ("cat list.txt | xargs -I{} cp {} .claude/settings.local.json", "lock-closed-shell", "settings.local.json"),
-    # (c) everywhere with no literal mention: a `log` verdict, no block
-    ('python -c "import subprocess; subprocess.run([1])"', "log", "write-target-unresolved"),
-    ('echo "unterminated', "log", "write-target-unresolved"),
-    ('echo x > "$OUT"', "log", "write-target-unresolved"),
-    ("git switch main", "log", "write-target-unresolved"),
-    # a glob inside a folder that holds no target
-    ("rm -rf build/*", "allow", ""),
-]
-
-
-def test_lock_gate_rules_for_everywhere(gtask):
-    """Item 5 (R43 point 1 (a)-(c)): (a) a parsed write path into a closed target refuses; (b) `everywhere` of either
-    kind refuses `lock-closed-shell` when the text names a closed target literally, quoting target and reason;
-    (c) otherwise a `log` verdict `write-target-unresolved`, no block. A variable, substitution or glob path is
-    `capable`. Catches: about one false block in ten real commands (every `everywhere` refused)."""
-    for command, want, quoted in LOCK_ROWS:
-        v = shell(gtask, command)
-        assert _kind(v) == want, command
-        assert quoted in (v.message or "") or quoted in (v.reason_id or ""), command
-
-
 MUST_PASS = [  # real command shapes (synthetic paths) the lock gate must never refuse
     "python -m pytest -q",
     'python -c "import subprocess; subprocess.run([\'python\', \'-m\', \'pytest\'])"',
@@ -330,28 +161,6 @@ MUST_PASS = [  # real command shapes (synthetic paths) the lock gate must never 
     "python - <<'EOF'\nimport json\nprint(json.dumps({}))\nEOF",
     'cd src && python -c "import os; os.remove(name)"',
 ]
-
-
-NAMED_TARGET_ROWS = [  # R81, R81a: (command, verdict); each command is `everywhere`, so literal reach decides
-    ("python - <<'EOF'\nimport subprocess\n# R09: only the State differs\nEOF", "log"),
-    ("python -c 'import subprocess; print(\"locks\")'", "log"),
-    ("python - <<'EOF'\nimport subprocess\nengine = 1\nEOF", "log"),
-    ("cat .gitignore | xargs -n1 echo", "log"),  # the root's own .gitignore, not the bundle's
-    ("rm -rf $X/engine", "lock-closed-shell"),
-    ("echo x > ${X}/state/x", "lock-closed-shell"),
-    ("cat list.txt | xargs -I{} cp {} mkway/.gitignore", "lock-closed-shell"),  # the full bundle-relative literal
-    ("cd $D && echo x > mkway.lock", "lock-closed-shell"),  # a file base name keeps the space position (H5 row)
-]
-
-
-def test_named_target_needs_a_path_position_for_folders(gtask):
-    """R81 (amends item 5 (b)): the defect at 781a980: `locks.named_target` took a folder target's base name
-    (`state`, `locks`, `engine`) or a leading-dot file's (`.gitignore`) after a space or a quote, so a plain word
-    such as «only the State differs» in a heredoc refused 909 of 943 real commands. Now those base names count only
-    right after `/` or `\\` (or as the full literal); other file base names keep their positions. Catches: a
-    word-keyed refusal."""
-    for command, want in NAMED_TARGET_ROWS:
-        assert _kind(shell(gtask, command)) == want, command
 
 
 def test_must_pass_table_of_real_shapes(gtask):

@@ -24,33 +24,35 @@ def _section():
 
 
 def test_one_section_with_a_body():
-    """E12: one heading `## Deliverables: built from tested code, compared with a named base`, with a body. Catches: a
-    missing or doubled section."""
+    """Checks: one heading `## Deliverables: built from tested code, compared with a named base`, with a body (E12)."""
+    # Catches: a missing or doubled section
     assert README.read_text(encoding="utf-8").count("\n" + HEADING + "\n") == 1
     assert len(_section()) > 1200
 
 
 def test_the_section_names_every_reason_key_command_and_file():
-    """E12: every refusal reason, both profile keys (both are in the schema), the three commands, the state files, the
-    check line and the start line are in the text. Catches: a refusal a session will meet that the README does not
-    explain."""
+    """Checks: every refusal reason, both profile keys, the commands, state files, check and start lines are in the text (E12)."""
+    # Catches: a refusal a session will meet that the README does not explain
     flat = _section()
     schema = json.loads((REPO / "engine" / "profile.schema.json").read_text(encoding="utf-8"))
     assert set(schema["properties"]["deliverables"]["properties"]) == {"paths", "require_base"}
-    for reason in REASONS:
-        assert f"`{reason}`" in flat, reason
-    for word in ("`deliverables.paths`", "`deliverables.require_base`", "`mkway built <path>`",
-                 "`mkway delivered <path>`", "`mkway deliverables`", "`deliverables.jsonl`", "`delivered.jsonl`",
-                 "`commit_tests.jsonl`", "`base: <sha8>`", "`.check.md`", "`card close`",
-                 "`deliverables: N built, M changed since built, K delivered`"):
-        assert word in flat, word
+    missing_reasons = [r for r in REASONS if f"`{r}`" not in flat]
+    assert not missing_reasons, missing_reasons
+    missing_words = [word for word in (
+        "`deliverables.paths`", "`deliverables.require_base`", "`mkway built <path>`",
+        "`mkway delivered <path>`", "`mkway deliverables`", "`deliverables.jsonl`", "`delivered.jsonl`",
+        "`commit_tests.jsonl`", "`base: <sha8>`", "`.check.md`", "`card close`",
+        "`deliverables: N built, M changed since built, K delivered`") if word not in flat]
+    assert not missing_words, missing_words
 
 
 def test_the_section_names_the_rules_behind_the_gates():
-    """E12: the section says what a deliverable is (a file at a named path with its sha256, built on the final HEAD,
-    past its gates and the fresh-reader check), what the base is (a delivered file, never an internal run), the
-    bypass cases that stay refused, and the class. Catches: a rule whose edges the reader must find in the code."""
+    """Checks: the section says what a deliverable and its base are, and the bypass cases and the class stay refused (E12)."""
+    # what a deliverable is: a file at a named path with its sha256, built on the final HEAD, past its gates and the
+    # fresh-reader check; the base is a delivered file, never an internal run; Catches: a rule whose edges the reader
+    # must find in the code
     flat = _section().lower()
-    for phrase in ("named path", "sha256", "final head", "fresh-reader", "never an internal run", "delivered file",
-                   "changed after it was built", "owner's command", "uncommitted", "ancestor", "command check"):
-        assert phrase in flat, phrase
+    missing_phrases = [phrase for phrase in (
+        "named path", "sha256", "final head", "fresh-reader", "never an internal run", "delivered file",
+        "changed after it was built", "owner's command", "uncommitted", "ancestor", "command check") if phrase not in flat]
+    assert not missing_phrases, missing_phrases

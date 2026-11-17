@@ -24,13 +24,45 @@ class RootNotFound(Exception):
     """No --root, no $CLAUDE_PROJECT_DIR, and no git work tree to ask (or vcs none)."""
 
 
+def _inside(folder: Path, parent: Path) -> bool:
+    try:
+        return os.path.commonpath([os.path.normcase(str(folder)), os.path.normcase(str(parent))]) == \
+            os.path.normcase(str(parent))
+    except ValueError:  # another drive
+        return False
+
+
+def _mkway_root_above(folder: Path) -> Optional[Path]:
+    """The nearest folder from `folder` up that holds `mkway/profile.json`, looking no higher than the top of the git
+    work tree (the first folder with a `.git` entry); None when there is none. No git is run."""
+    for here in (folder, *folder.parents):
+        if (here / PROFILE_FOLDER / PROFILE_NAME).is_file():
+            return here
+        if (here / ".git").exists():
+            return None
+    return None
+
+
+def cli_root(named: Path, cwd: Path) -> Path:
+    """The root a command-line call works in (card MW-054). A session's shell inherits `CLAUDE_PROJECT_DIR` from the
+    session that launched it, while Claude Code sets the right value for the hooks only; so the variable (`named`) holds
+    when the current folder is inside it or inside no mkway root, and a current folder inside ANOTHER mkway root is
+    that root's own call."""
+    named, cwd = Path(named).resolve(), Path(cwd).resolve()
+    if _inside(cwd, named):
+        return named
+    return _mkway_root_above(cwd) or named
+
+
 def find_root(env: Optional[Mapping[str, str]] = None, root_arg: Optional[str] = None, vcs: Optional[str] = None,
-              cwd: Optional[Path] = None) -> Path:
+              cwd: Optional[Path] = None, env_needs_cwd: bool = False) -> Path:
+    """`env_needs_cwd` is the command line's reading of `CLAUDE_PROJECT_DIR` (see `cli_root`); the hook trusts it."""
     env = os.environ if env is None else env
     if root_arg:
         return Path(root_arg).resolve()
     if env.get(ROOT_ENV):
-        return Path(env[ROOT_ENV]).resolve()
+        named = Path(env[ROOT_ENV]).resolve()
+        return cli_root(named, Path(cwd) if cwd else Path.cwd()) if env_needs_cwd else named
     if vcs == "none":
         raise RootNotFound("no --root and no $CLAUDE_PROJECT_DIR; vcs is none, so git is not asked")
     try:

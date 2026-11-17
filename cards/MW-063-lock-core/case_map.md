@@ -1,0 +1,46 @@
+# MW-063 case map: lock DECISION tests, old -> new
+
+> Format: `old_file::old_test -> new_file::new_test`, or `-> dropped: <T-criterion> <reason>`.
+> Cases of the shell-command reader (MW-003 hardening), the register seal, the one-writer case and the start line stay where they are.
+> One documentation check stays in tests/test_mw022_locks_shared.py (the README, changelog, register and keys check of MW-022):
+> tests/test_mw025_copy_check.py reads its name and marker from that file.
+
+tests/test_lock.py::test_built_in_targets_refuse_edit_tool_writes -> core/test_lock_decide.py::test_an_edit_inside_a_closed_built_in_target_is_refused
+tests/test_lock.py::test_forge_shapes_are_refused -> core/test_lock_decide.py::test_a_forged_write_to_a_lock_file_the_engine_or_the_register_is_refused
+tests/test_lock.py::test_owner_only_commands_in_any_spelling -> core/test_lock_decide.py::test_a_session_call_of_an_owner_command_is_refused
+tests/test_lock.py::test_light_mode_lets_card_moves_through -> core/test_lock_decide.py::test_light_mode_lets_a_session_make_the_card_moves
+tests/test_lock.py::test_holder_reopens_only_from_waiting -> core/test_lock_decide.py::test_the_holder_reopens_its_pause_only_from_waiting
+tests/test_lock.py::test_one_card_per_session_and_release -> core/test_lock_decide.py::test_a_session_takes_a_second_card_only_when_its_first_is_closed
+tests/test_lock.py::test_profile_targets_open_and_expire -> shell/test_lock_facts.py::test_a_profile_target_is_closed_unless_its_marker_is_open_and_not_expired
+tests/test_lock.py::test_commit_of_closed_targets_and_the_register -> core/test_lock_decide.py::test_the_register_commits_only_when_its_sha256_equals_its_seal
+tests/test_lock.py::test_lock_gate_runs_in_both_groups -> dropped: T2 a loop over two cases in one body; the refusal through the edit group and through the shell group is proven by the real hook in tests/test_e2e_gates.py (lock-closed-edit, lock-closed-shell)
+
+tests/test_mw022_locks_shared.py::test_a_hold_set_in_the_main_folder_stops_a_write_in_a_linked_work_tree -> shell/test_lock_facts.py::test_a_hold_marker_written_in_the_main_tree_closes_the_hold_in_the_linked_tree
+tests/test_mw022_locks_shared.py::test_a_hold_set_in_a_linked_work_tree_stops_the_main_folder -> shell/test_lock_facts.py::test_a_hold_marker_written_in_the_linked_tree_closes_the_hold_in_the_main_tree
+tests/test_mw022_locks_shared.py::test_a_lock_target_opened_in_one_work_tree_is_open_in_the_other -> shell/test_lock_facts.py::test_a_lock_target_opened_in_one_tree_is_open_in_the_other
+tests/test_mw022_locks_shared.py::test_a_repository_with_no_linked_work_tree_behaves_as_before -> shell/test_lock_facts.py::test_a_repository_with_no_linked_tree_keeps_its_markers_in_its_own_state_folder
+tests/test_mw022_locks_shared.py::test_a_work_tree_whose_profile_has_no_target_of_that_name_ignores_the_marker -> shell/test_lock_facts.py::test_a_tree_whose_profile_has_no_target_of_that_name_ignores_the_marker
+tests/test_mw022_locks_shared.py::test_a_stale_local_marker_still_closes_and_is_reported -> shell/test_lock_facts.py::test_an_older_local_marker_still_closes_the_hold_in_its_own_tree_only
+tests/test_mw022_locks_shared.py::test_closed_wins_between_the_local_and_the_shared_marker -> shell/test_lock_facts.py::test_closed_wins_when_the_local_marker_is_closed_and_the_shared_one_is_open
+tests/test_mw022_locks_shared.py::test_the_owner_open_and_go_also_clear_a_stale_local_marker -> shell/test_lock_facts.py::test_the_owner_go_removes_an_older_local_marker
+tests/test_mw022_locks_shared.py::test_lock_list_shows_the_shared_state_and_its_folder -> shell/test_lock_facts.py::test_the_lock_list_prints_the_shared_folder_the_hold_and_the_open_lock
+tests/test_mw022_locks_shared.py::test_everything_else_stays_in_the_work_trees_own_state_folder -> shell/test_lock_facts.py::test_a_hold_marker_is_written_into_the_shared_folder_and_nowhere_else
+
+tests/test_mw003_closefix.py::test_glob_below_a_folder_target_refuses -> core/test_lock_decide.py::test_a_glob_that_reaches_a_closed_target_is_refused
+tests/test_mw003_closefix.py::test_named_target_needs_path_boundaries -> core/test_lock_decide.py::test_a_path_in_a_path_position_names_a_closed_target
+tests/test_mw003_closefix.py::test_all_commit_refuses_when_git_fails -> shell/test_lock_facts.py::test_a_failed_diff_with_a_head_is_a_problem_under_dash_a
+
+tests/test_mw003_remainder.py::test_a_glob_that_reaches_a_closed_target_segment_by_segment_refuses -> core/test_lock_decide.py::test_a_glob_that_reaches_a_closed_target_is_refused
+tests/test_mw003_remainder.py::test_verify_first_a_glob_in_the_locks_segment -> core/test_lock_decide.py::test_a_glob_that_reaches_a_closed_target_is_refused
+
+tests/test_mw003_fixlist.py::test_a_write_that_holds_a_lock_target_is_refused -> core/test_lock_decide.py::test_a_write_to_a_folder_that_holds_a_closed_target_is_refused
+tests/test_mw003_fixlist.py::test_commit_pathspecs_are_checked_per_file -> core/test_lock_decide.py::test_a_commit_pathspec_is_judged_by_the_files_it_takes
+tests/test_mw003_fixlist.py::test_first_commit_pathspecs_are_checked_per_file -> shell/test_lock_facts.py::test_before_the_first_commit_a_pathspec_expands_over_the_index
+tests/test_mw003_fixlist.py::test_staged_register_is_read_from_the_root_folder -> shell/test_lock_facts.py::test_the_staged_register_is_read_as_a_blob_from_the_root
+tests/test_mw003_fixlist.py::test_staged_register_read_failure_refuses -> shell/test_lock_facts.py::test_a_register_that_is_not_in_the_index_reads_as_a_git_failure
+tests/test_mw003_fixlist.py::test_commit_from_the_index_checks_what_it_takes -> core/test_lock_decide.py::test_a_commit_with_no_pathspec_takes_the_staged_files
+tests/test_mw003_fixlist.py::test_first_commit_from_the_index_checks_what_it_takes -> shell/test_lock_facts.py::test_before_the_first_commit_the_index_names_are_read
+tests/test_mw003_fixlist.py::test_lock_gate_rules_for_everywhere -> core/test_lock_decide.py::test_a_command_that_writes_anywhere_and_names_a_closed_target_is_refused
+tests/test_mw003_fixlist.py::test_named_target_needs_a_path_position_for_folders -> core/test_lock_decide.py::test_a_plain_word_names_no_closed_target
+
+tests/test_mw003_close_fix.py::test_a_session_pauses_only_its_own_card -> core/test_lock_decide.py::test_a_session_pauses_only_the_card_it_holds

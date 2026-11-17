@@ -72,18 +72,30 @@ def test_keys_md_has_one_line_per_draft_key():
         "owner_ask.dir", "owner_ask.markers", "owner_ask.sources",  # changed by MW-007 (E1, E3): the ask gate's keys
         "agents.cap_minutes",  # changed by MW-004 (E16): the agent cap of the start block
         "rules.cards", "rules.test_for",  # changed by MW-021 (E3): the rule-card keys
+        "tests.shape.mode",  # changed by MW-073: `trip` or `watch`, the shape check of the tests a commit adds
         "deliverables.paths", "deliverables.require_base",  # changed by MW-020 (E2): the deliverables keys
         "commit.junk", "commit.data_patterns", "commit.max_file_kb",  # changed by MW-006 (E3): the commit gate's keys
         "tests.command", "gates.commit_tests.budget_seconds",  # changed by MW-005 (E5): the commit gate's keys
         "delete.max_backup_mb", "delete.sql_allowed",  # changed by MW-009 (E3): the delete gate's keys
+        "tests.verdict_add.mode",  # changed by MW-080 (decision: R196a): trip or watch for the verdict command's refusals
         "gates.trip.min_calls", "gates.trip.share",  # changed by MW-012 (E20): the trip keys; schema path `gates`
+        "gates.<name>.watch_until",  # changed by MW-112 (R284a): the end date of an owner's watch of a form gate
         "owner_ask.max_open", "owner_ask.tool_allowed", "notify.command",  # changed by MW-014 (E19): the asks that do not stop the work
         "leads.escalate_hours", "leads.max_cards",  # changed by MW-017 (E20): the lead role's two keys
+        "paths.outside_writable",  # changed by MW-103 (R255b), R274-D1: the extra writable folders outside the repository, for every session
         "messaging.duplicate_window_hours", "messaging.dead_hours",  # changed by MW-018 (E14): the messaging keys
         "messaging.ack_reminder_minutes",
+        "messaging.session_id_watch_until",  # changed by MW-110 (decision MW110-D2): the end date of the session id transition
+        "gates.ping.mode", "sessions.file",  # changed by MW-076 (decisions: R185, R186): the ping gate's switch, the sessions file
         "state.shared_dir",  # changed by MW-026: the opt-in shared state folder
         "lock_gate.git_builtins_extra",  # changed by MW-031: names added to the git built-in list
-        "commit.message_prefix"}  # changed by MW-035: the prefix of the install commit message
+        "commit.message_prefix",  # changed by MW-035: the prefix of the install commit message
+        "cards.stale_hours",  # changed by MW-045: hours before a silent holder's card is released at a take
+        "cards.verdicts",  # changed by MW-068: `required` or `off`, the blind verdict check at card close
+        "tests.hermetic_dirs",  # changed by MW-074 (decision: R177): the folders whose tests are hermetic and shuffled
+        "wake.mode", "wake.deadline_seconds", "wake.poll_seconds",  # changed by MW-078 (decisions: R191, R193): the inbox waiter
+        "tests.red_proof.mode",  # changed by MW-072: `trip` or `watch`, the red proof of the commit gate
+        "tests.red_proof.decision_pattern"}  # changed by MW-090 (T7 decision: R225): the regex of the decisions a commit message names
     schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
     assert now_paths == _leaves(schema)
 

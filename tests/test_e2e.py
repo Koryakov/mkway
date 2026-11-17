@@ -148,10 +148,14 @@ def test_root_suite_does_not_collect_mkway(tmp_path):
 
 def test_engine_repo_marker_selects_the_repository_only_tests(tmp_path):
     """E44: the marker `engine_repo` is declared and carried by the register, repository-scan, install and
-    end-to-end tests, so `-m "not engine_repo"` (what `mkway check` runs in a copy) leaves them out."""
+    end-to-end tests, so `-m "not engine_repo"` (what `mkway check` runs in a copy) leaves them out.
+    Catches: addopts filters any marked test except perf."""
     assert "engine_repo:" in (REPO / "pytest.ini").read_text(encoding="utf-8")
     # the engine repository's own run never filters the marked tests out (blind check F3)
-    assert "-m" not in (REPO / "pytest.ini").read_text(encoding="utf-8").split("addopts", 1)[1].splitlines()[0]
+    def only_perf_filter(ini):  # no -m at all, or exactly -m "not perf"
+        return "-m" not in ini.split("addopts", 1)[1].splitlines()[0].replace('-m "not perf"', "")
+    assert only_perf_filter((REPO / "pytest.ini").read_text(encoding="utf-8"))
+    assert not only_perf_filter('addopts = -m "not slow"') and not only_perf_filter('addopts = -m "not engine_repo"')
     proc = subprocess.run([sys.executable, "-m", "pytest", "--collect-only", "-q", "-m", "not engine_repo",
                            "-p", "no:cacheprovider", "--basetemp", str(tmp_path / "bt")], cwd=str(REPO),
                           capture_output=True, text=True, timeout=120)

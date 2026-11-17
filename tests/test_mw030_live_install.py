@@ -28,6 +28,8 @@ from pathlib import Path
 import pytest
 
 from _engine import REPO
+from _hook_driver import HookRun, decision
+from _red_project import RedFirstError, commit_red_first
 from test_install import GIT_ID, make_light_source
 
 pytestmark = pytest.mark.engine_repo
@@ -36,8 +38,14 @@ TASK = "Task1"  # the synthetic task folder: <worktree>/task/Task1
 LEAD, BUILDER = "session-lead-a", "session-builder-b"
 CARD_ID = "CARD-001"
 CARD_TITLE = "Live install check"
-PATHS = ("src/feature.py", "tests/test_live.py")
+# MW-039: `src/make.py` and `src/generated.py` belong to the card too (MW-034 step): the refusals of the subtask and the
+# commit gate for them were invisible while `Sessions.fire` read only the exit code
+PATHS = ("src/feature.py", "tests/test_live.py", "src/make.py", "src/generated.py")
+TEST_FILE = "tests/test_live.py"
 TEST_NODE = "tests/test_live.py::test_live_feature"
+# R217: the card's test fails first, by the module the feature creates (a red test: a `Catches:` docstring)
+RED_TEST = ('from src.feature import VALUE\n\n\ndef test_live_feature():\n    """Catches: the feature is missing or not two."""\n'
+            '    assert VALUE == 2\n')
 TIME_LIMIT_SECONDS = 90  # the card says about 60; the gate fails the run only past this
 SHARED_STATE = f"task/{TASK}/mkway/state"  # where MW-026 (state in root) puts the linked worktree's shared state
 
@@ -121,6 +129,11 @@ class Sessions:
             if "mkway dispatcher-error:" in proc.stdout + proc.stderr:  # the dispatcher's own line (R13c)
                 self.live.problem(step, f"{event}/{group} dispatcher error: {proc.stdout}{proc.stderr}")
                 return None
+            # MW-039: a refusal is exit 0 plus JSON (`permissionDecision: deny`, or `decision: block`): read it
+            got = decision(HookRun(group, command, proc.returncode, proc.stdout, proc.stderr, 0.0))
+            if got.kind != "allow":
+                self.live.problem(step, f"{event}/{group} {got}: {got.text}")
+                return None
             outs.append(proc.stdout)
         return outs
 
@@ -162,6 +175,22 @@ class Sessions:
             path.write_text(text.replace(old, new, 1), encoding="utf-8", newline="\n")
             return {"filePath": str(path)}
         return self.tool(step, session, "Edit", {"file_path": str(path), "old_string": old, "new_string": new}, act)
+
+
+def _red_first(s, live, root):
+    """R217: the builder commits the test alone and then the feature, each commit through the real hook (the commit gate
+    runs the staged tree: the test is red by the module `src`, which the second commit creates). A refusal or a missing
+    commit is a problem of the flow, and the flow stops."""
+    git_call = lambda *args: _git(root, *args)  # noqa: E731
+    stage = lambda paths: s.bash("git add", BUILDER, "git add " + " ".join(paths))  # noqa: E731
+    commit = lambda message, paths: s.bash("git commit", BUILDER,  # noqa: E731
+                                           f'git commit -m "{message}" -- ' + " ".join(paths))
+    try:
+        return commit_red_first(git_call, stage, commit, (f"{CARD_ID} add the test of the feature", [TEST_FILE]),
+                                (f"{CARD_ID} add the feature", ["src/feature.py"]))
+    except RedFirstError as exc:
+        live.problem("red-first commit", str(exc))
+        return None
 
 
 def _card_text(template: str) -> str:
@@ -224,7 +253,7 @@ def live(tmp_path_factory):
     # the owner's own edit of the profile: leads open the cards they ordered
     profile_path = root / "mkway" / "profile.json"
     profile = json.loads(profile_path.read_text(encoding="utf-8"))
-    profile["cards"] = {"approver": "orderer"}
+    profile["cards"] = {"approver": "orderer", "verdicts": "off"}  # MW-068: this flow judges the lead path, not the verdict check
     profile_path.write_text(json.dumps(profile, indent=2) + "\n", encoding="utf-8")
 
     s = Sessions(base, root, result)
@@ -251,13 +280,10 @@ def live(tmp_path_factory):
                                 "Order: write the feature and its test inside the card's Paths.\n"),
                 lambda: s.bash("card open", LEAD, f"python mkway/engine/mkway.py card open {CARD_ID}"),
                 lambda: s.bash("card take", BUILDER, f"python mkway/engine/mkway.py card take {CARD_ID}"),
-                lambda: s.write("write test", BUILDER, "tests/test_live.py",
-                                "def test_live_feature():\n    assert 1 + 1 == 2\n"),
+                lambda: s.write("write test", BUILDER, TEST_FILE, RED_TEST),
                 lambda: s.write("write feature", BUILDER, "src/feature.py", "VALUE = 1\n"),
                 lambda: s.edit("edit feature", BUILDER, "src/feature.py", "VALUE = 1", "VALUE = 2"),
-                lambda: s.bash("git add", BUILDER, "git add src/feature.py tests/test_live.py"),
-                lambda: s.bash("git commit", BUILDER,
-                               f'git commit -m "{CARD_ID} add the feature and its test" -- src/feature.py tests/test_live.py'),
+                lambda: _red_first(s, result, root),  # R217: the test alone first (red by the missing module), then the feature
                 # MW-034: a file a `python <script>` call wrote inside the Paths commits (no write record exists)
                 lambda: s.write("write script", BUILDER, "src/make.py",
                                 "from pathlib import Path\n"
@@ -294,12 +320,15 @@ def live(tmp_path_factory):
         ignore.write_text("engine/\nlocks/\nstate/\n", encoding="utf-8")  # the shape an earlier install wrote
         (root / "foreign.txt").write_text("f\n", encoding="utf-8")
         _git(root, "add", "foreign.txt")
+        (root / "mkway" / "asks").mkdir(exist_ok=True)  # MW-036: a lead's file in the bundle
+        (root / "mkway" / "asks" / "x.md").write_text("ask\n", encoding="utf-8")
         proc = owner("install", "--from", str(src), "--ref", "HEAD", "--root", str(root), "--commit")
         result.reinstall_commit = (proc.returncode, proc.stdout + proc.stderr,
                                    _git(root, "show", "--name-only", "--format=", "HEAD").split(),
                                    _git(root, "diff", "--cached", "--name-only").split(),
                                    _git(root, "ls-files", "mkway/engine/mkway.py").split(),
-                                   ignore.read_text(encoding="utf-8").splitlines())
+                                   ignore.read_text(encoding="utf-8").splitlines(),
+                                   _git(root, "status", "--porcelain", "--", "mkway/asks"))
     except (subprocess.CalledProcessError, OSError) as exc:
         result.problem("reinstall commit", f"{type(exc).__name__}: {getattr(exc, 'stderr', '') or exc}")
     result.seconds = time.perf_counter() - started
@@ -307,8 +336,7 @@ def live(tmp_path_factory):
 
 
 def test_the_check_run_from_the_task_folder_is_clean(live):
-    """E1: `mkway check` run from the task folder, no `--root`, no `CLAUDE_PROJECT_DIR`: exit 0, tests green, and no line
-    that reads as a warning, a difference, a missing lock or an invalid profile."""
+    """Checks: mkway check run from the task folder, with no root option and no project dir variable, exits 0 with tests green and no line that reads as a warning, a difference, a missing lock or an invalid profile (E1)."""
     assert "install" not in dict(live.problems), live.message()
     code, text = live.check
     lines = text.splitlines()
@@ -321,11 +349,11 @@ def test_the_check_run_from_the_task_folder_is_clean(live):
 
 
 def test_a_reinstall_over_a_checked_install_succeeds(live):
-    """MW-032 E7: `mkway install` run again over an install whose `mkway check` has already run: exit 0, no traceback,
-    the new copy matches the lock, no leftover engine folder beside the copy."""
+    """Checks: mkway install run again over an install whose check has already run exits 0 with no traceback, the new copy matches the lock and no leftover engine folder sits beside the copy (MW-032 E7)."""
     assert "install" not in dict(live.problems), live.message()
     code, text = live.reinstall
-    assert code == 0 and "Traceback" not in text, text
+    assert code == 0, text
+    assert "Traceback" not in text, text
     bundle = live.root / "mkway"
     lock = json.loads((bundle / "mkway.lock").read_text(encoding="utf-8"))
     import install
@@ -335,13 +363,15 @@ def test_a_reinstall_over_a_checked_install_succeeds(live):
 
 
 def test_a_reinstall_commit_takes_only_the_install_paths(live):
-    """MW-035 E6: `install --commit` over an install whose bundle `.gitignore` holds `engine/`, while a foreign file is
-    staged: the line is gone, the engine copy is tracked, the foreign file is still staged and not in the commit."""
+    """Checks: install with the commit option over an install whose bundle ignore file holds engine, while a foreign file is staged, drops the line, tracks the engine copy and leaves the foreign file staged and out of the commit (MW-035 E6)."""
     assert "reinstall commit" not in dict(live.problems), live.message()
     assert live.reinstall_commit is not None, live.message()
-    code, text, taken, staged, tracked, ignore = live.reinstall_commit
+    code, text, taken, staged, tracked, ignore, asks = live.reinstall_commit
+    assert not [p for p in taken if "asks" in p.split("/")[1:-1]], taken  # MW-036: a session's file in the bundle stays out
+    assert asks.startswith("??"), asks
     assert code == 0, text
-    assert "engine/" not in ignore and "locks/" in ignore, ignore
+    assert "engine/" not in ignore, ignore
+    assert "locks/" in ignore, ignore
     assert tracked == ["mkway/engine/mkway.py"], tracked  # `ls-files` answers relative to the task folder
     assert f"task/{TASK}/mkway/.gitignore" in taken, taken
     assert not [p for p in taken if p.endswith("foreign.txt")], taken
@@ -349,8 +379,8 @@ def test_a_reinstall_commit_takes_only_the_install_paths(live):
 
 
 def test_the_lead_and_builder_path_has_no_refusal(live):
-    """E2: lead register, card new, Write of CARD.md and ORDER.md, card open (approver orderer); builder card take, an
-    Edit inside the Paths, a commit through the commit gates; the lead closes the card. Any refusal fails the path."""
+    """Checks: the lead and builder path, from lead register to the lead's close of the card, runs with no refusal (E2)."""
+    # lead register, card new, Write of CARD.md and ORDER.md, card open (approver orderer); builder card take, an Edit inside the Paths, a commit through the commit gates; any refusal fails the path
     assert not live.problems, live.message()
     rows = (live.root / "mkway" / "cards" / "REGISTER.md").read_text(encoding="utf-8")
     assert re.search(rf"^\| {CARD_ID} \|.*\| closed \|", rows, re.M), rows
@@ -358,8 +388,7 @@ def test_the_lead_and_builder_path_has_no_refusal(live):
 
 
 def test_nothing_else_is_written_outside_the_task_root(live):
-    """E3: the fixture repository's main worktree and the linked worktree's top (outside the task folder) hold the same
-    files after the flow as before it, except the shared state of the linked worktree (E4, MW-026)."""
+    """Checks: the fixture repository's main worktree and the linked worktree's top hold the same files after the flow as before it, except the linked worktree's shared state (E3, E4, MW-026)."""
     shared = lambda rel: rel == SHARED_STATE or rel.startswith(SHARED_STATE + "/")  # noqa: E731
     changed = {where: sorted(rel for rel in set(after) | set(before)
                              if after.get(rel) != before.get(rel) and not (where == "main" and shared(rel)))
@@ -369,31 +398,35 @@ def test_nothing_else_is_written_outside_the_task_root(live):
 
 
 def test_the_shared_state_stays_inside_the_task_root(live):
-    """E4: no file of the main worktree changes at all: the leads registry and the inboxes live inside the task root."""
+    """Checks: no file of the main worktree changes at all, as the leads registry and the inboxes live inside the task root (E4)."""
     changed = sorted(rel for rel in set(live.after_main) | set(live.before_main)
                      if live.after_main.get(rel) != live.before_main.get(rel))
     assert not changed, f"written to the main worktree: {changed}"
 
 
-def test_the_profile_says_git_and_the_bundle_ignore_file_exists(live):
-    """E5: the starter profile reads vcs git; `mkway/.gitignore` exists and ignores the bundle's machine folders."""
+@pytest.mark.parametrize("line", [pytest.param("state/", id="state"), pytest.param("locks/", id="locks"),
+                                  pytest.param("__pycache__/", id="pycache")])  # MW-027: run-time folders ignored
+def test_the_profile_says_git_and_the_bundle_ignore_file_exists(live, line):
+    """Checks: the starter profile reads vcs git, and mkway/.gitignore exists and ignores the bundle's machine folders but not the engine copy (E5)."""
     profile = json.loads((live.root / "mkway" / "profile.json").read_text(encoding="utf-8"))
     assert profile["vcs"] == "git"
     ignore = live.root / "mkway" / ".gitignore"
     assert ignore.is_file(), "the install wrote no mkway/.gitignore"
     lines = ignore.read_text(encoding="utf-8").splitlines()
-    for line in ("state/", "locks/", "__pycache__/"):  # MW-027: run-time folders ignored
-        assert line in lines, lines
+    assert line in lines, lines
     assert "engine/" not in lines  # MW-027: the engine copy is tracked, so a fresh worktree needs no install
 
 
-def test_the_first_status_offers_no_runtime_file_and_the_settings_hold_the_hooks(live):
-    """E9 (MW-027): after install and the whole flow, `git status --porcelain` in the linked worktree lists no run-time
-    file under `mkway/state`, `mkway/locks`, no bytecode or check temp folder; the committed `.claude/settings.json`
-    holds the hook entries and install wrote no `settings.local.json`."""
+@pytest.mark.parametrize("bad", [
+    pytest.param("/state/", id="state-folder"), pytest.param("/locks/", id="locks-folder"),
+    pytest.param("__pycache__", id="pycache"), pytest.param(".pyc", id="bytecode"),
+    pytest.param(".pytest_tmp", id="pytest-tmp"), pytest.param(".pytest_cache", id="pytest-cache"),
+    pytest.param("settings.local.json", id="local-settings")])
+def test_the_first_status_offers_no_runtime_file_and_the_settings_hold_the_hooks(live, bad):
+    """Checks: after install and the whole flow the status of the linked worktree offers no run-time file, bytecode or check temp folder, and the committed settings hold the hook entries with no local settings file (E9, MW-027)."""
+    # git status --porcelain in the linked worktree lists no file under mkway/state or mkway/locks
     assert "install" not in dict(live.problems), live.message()
-    for bad in ("/state/", "/locks/", "__pycache__", ".pyc", ".pytest_tmp", ".pytest_cache", "settings.local.json"):
-        assert bad not in live.status, f"{bad} offered for commit:\n{live.status}"
+    assert bad not in live.status, f"{bad} offered for commit:\n{live.status}"
     assert f"task/{TASK}/.claude/settings.json" in live.status  # offered, not ignored
     settings = json.loads((live.root / ".claude" / "settings.json").read_text(encoding="utf-8"))
     assert {"SessionStart", "PreToolUse", "PostToolUse"} <= set(settings["hooks"]), list(settings["hooks"])
@@ -401,9 +434,7 @@ def test_the_first_status_offers_no_runtime_file_and_the_settings_hold_the_hooks
 
 
 def test_a_second_worktree_of_the_install_commit_starts_with_no_install(live):
-    """E10 (MW-027): the install committed in the fixture, a second linked worktree added from that commit: its start
-    hook, run from the committed `settings.json` with no install, exits 0, prints the start block, and the block shows
-    no drift and no logged error."""
+    """Checks: a second linked worktree added from the install commit runs its start hook from the committed settings with no install, exits 0 and prints a start block with no drift and no logged error (E10, MW-027)."""
     second = live.second
     assert second is not None, live.message()
     assert not second.problems, second.message()
@@ -411,36 +442,47 @@ def test_a_second_worktree_of_the_install_commit_starts_with_no_install(live):
     block = live.outputs["start-second"]
     assert "mkway v" in block, block
     text = json.dumps(block)
-    assert "drift-machine" not in text and "mkway dispatcher-error:" not in text and "profile-invalid" not in text, block
+    assert "drift-machine" not in text, block
+    assert "mkway dispatcher-error:" not in text, block
+    assert "profile-invalid" not in text, block
 
 
-def test_the_start_block_has_no_error_line(live):
-    """E6: the start block of a session in the installed task root names no profile error, no dispatcher error and no
-    logged gate error."""
-    for session in (LEAD, BUILDER):
-        block = live.outputs[f"start-{session}"]
-        assert block.strip(), f"no start block for {session}: {live.message()}"
-        text = json.dumps(block)
-        assert "profile-invalid" not in text and "mkway dispatcher-error:" not in text, block
-        for line in re.findall(r"errors logged: gate-error (\d+), dispatcher-error (\d+)", block):
-            assert line == ("0", "0"), block
+@pytest.mark.parametrize("session", [pytest.param("session-lead-a", id="lead"), pytest.param("session-builder-b", id="builder")])
+def test_the_start_block_has_no_error_line(live, session):
+    """Checks: the start block of a session in the installed task root names no profile error, no dispatcher error and no logged gate error (E6)."""
+    block = live.outputs[f"start-{session}"]
+    assert block.strip(), f"no start block for {session}: {live.message()}"
+    text = json.dumps(block)
+    assert "profile-invalid" not in text, block
+    assert "mkway dispatcher-error:" not in text, block
+    assert [line for line in re.findall(r"errors logged: gate-error (\d+), dispatcher-error (\d+)", block) if line != ("0", "0")] == [], block
 
 
+@pytest.mark.perf
 def test_the_run_stays_inside_the_time_limit(live):
-    """E7: the whole flow, fixture to close, takes about a minute; past the limit it fails."""
+    """Checks: the whole flow, fixture to close, ends inside the time limit of about a minute (E7)."""
+    # a wall-clock check, marked perf and kept out of commit and merge runs (R172)
     assert live.seconds < TIME_LIMIT_SECONDS, f"{live.seconds:.0f} s (limit {TIME_LIMIT_SECONDS} s)"
 
 
-def test_register_changelog_and_card_name_the_card():
-    """E8 (changed by MW-027): the register row, the changelog line, under the release that names the card, saying this
-    test is the release gate, the card."""
-    register = (REPO / "cards" / "REGISTER.md").read_text(encoding="utf-8")
-    assert re.search(r"^\| MW-030 \|.*`cards/MW-030-[a-z0-9-]+`", register, re.M)
-    text = (REPO / "CHANGELOG.md").read_text(encoding="utf-8")
-    version = (REPO / "VERSION").read_text(encoding="utf-8").strip()
-    assert f"\n## {version}\n" in text
-    # MW-027: a newer release may sit on top; the line is under the release that names the card
-    section = next(s for s in text.split("\n## ")[1:] if "MW-030" in s)
-    line = next(x for x in section.splitlines() if "MW-030" in x)
-    assert "release gate" in line
-    assert list((REPO / "cards").glob("MW-030-*/CARD.md"))
+def test_the_live_session_reads_a_refusal_from_the_hook_json(tmp_path):
+    """Catches: a live session that misses a refusal a hook prints as JSON with exit 0, or blocks a hook that printed nothing (MW-039 E5)."""
+    # a hook that exits 0 and prints permissionDecision deny is how a PreToolUse refusal looks: it is a problem of the live flow and the call is not made; the exit code alone said neither
+    deny = json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                               "permissionDecisionReason": "[mkway lock.edit lock-closed-edit] no"}})
+    root = tmp_path / "task"
+    (root / ".claude").mkdir(parents=True)
+    settings = {"hooks": {"PreToolUse": [
+        {"matcher": "Write", "hooks": [{"type": "command", "command":
+            f"python -c \"import sys; print(sys.argv[1])\" '{deny}'"}]},
+        {"matcher": "Read", "hooks": [{"type": "command", "command": "python -c \"pass\""}]}]}}
+    (root / ".claude" / "settings.json").write_text(json.dumps(settings), encoding="utf-8")
+    result = Live()
+    sessions = Sessions(tmp_path, root, result)
+    assert sessions.fire("read", "PreToolUse", "s1", "Read", {"file_path": "a"}) == [""]
+    assert not result.problems
+    assert sessions.fire("write", "PreToolUse", "s1", "Write", {"file_path": "a", "content": "x"}) is None
+    assert len(result.problems) == 1, result.problems
+    assert "deny:lock-closed-edit" in result.problems[0][1], result.problems
+
+

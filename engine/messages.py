@@ -25,6 +25,10 @@ from pathlib import Path
 from typing import Optional
 
 import asks
+import board
+import cardtool
+import core_ping
+import core_session
 import leads
 import logs
 import paths
@@ -39,11 +43,25 @@ EVENTS = (NOTICE, RESULT)  # go to a lead and are never relayed on
 ROW_FIELDS = ("id", "from", "to", "kind", "reply_to", "ts", "ack_ts", "body")
 DEAD = "dead-letter.jsonl"
 PINGS = "pings.jsonl"
-PING_PREFIX = "mkway inbox "
-ID_PATTERN = r"[A-Za-z0-9][A-Za-z0-9._-]*"
-PING_LINE = re.compile(re.escape(PING_PREFIX) + "(" + ID_PATTERN + ")")
+RECORD = "message-record.jsonl"  # record R1: one row per delivered send and per ack (ruling R279)
+REFUSAL_EVENT = "refusal-delivery"  # MW-128: the record row of the inbox write the Stop hook makes; it is no `send`
+SCOPE = "messaging"  # the scope of the one-use permit of a messaging command (ruling R279c Q1)
+_SESSION_FILE = re.compile(r"[A-Za-z0-9._-]+")
+PING_PREFIX = core_session.PING_PREFIX  # one definition, in the pure core (card MW-066)
+ID_PATTERN = core_session.ID_PATTERN
+PING_LINE = core_session.PING_LINE
 SHOWN = 5
 NE = "not established"
+_EXPANDS = re.compile(r"\$(?=\S)|`")  # `$(`, `$name`, `${`, `$1`, a backtick; a `$` before a space or at the end is a dollar
+
+
+def text_problem(text: str) -> Optional[str]:
+    """MW-055: None when `text` is taken as the literal body of `send --text`; else what is wrong. The content of a quoted
+    argument is literal (MW-048) except `$(...)`, a backtick, `$name`, `${name}` and `$digit`, which a shell expands."""
+    if _EXPANDS.search(text or ""):
+        return ("the text holds `$(...)`, a backtick or `$name`, which a shell expands before the engine sees it; put "
+                "the message in a file under mkway/asks and pass `--file <path>`")
+    return None
 
 
 class MessageError(Exception):
@@ -71,7 +89,7 @@ def make_row(sender, to, kind, body, reply_to, now=None) -> dict:
 
 
 def append_row(shared, row: dict) -> None:
-    logs.append_jsonl(leads.inbox_path(shared, row["to"]), row)
+    leads.write_row(shared, row)
 
 
 def body_hash(text) -> str:
@@ -83,6 +101,92 @@ def body_hash(text) -> str:
 def first_line(text, limit: int = 80) -> str:
     line = str(text or "").strip().splitlines()[0] if str(text or "").strip() else ""
     return line if len(line) <= limit else line[:limit - 1] + "…"
+
+
+# --- the permit of a messaging command (ruling R279c Q1) ------------------------------------------------------------
+# The lock gate leaves the permit of `send`, `inbox` and `ack` under the session's own id, `permits/<session id>.json`, so
+# two sessions never overwrite or take each other's. The CLI opens only the file its variable names; with no variable,
+# before the end date, it takes the single most recent one. The shared `by.json` of the other commands is not touched.
+
+def _permit_file(state, session) -> Optional[Path]:
+    if not isinstance(session, str) or session in (".", "..") or not _SESSION_FILE.fullmatch(session):
+        return None
+    return Path(state) / cardtool.PERMITS / f"{session}.json"
+
+
+def issue_message_permit(state, session) -> bool:
+    """Leave the one-use permit of a messaging command under the session's own id: `{session_id, scope, time}`. False when
+    the id is empty or cannot be a file name."""
+    target = _permit_file(state, session)
+    if target is None:
+        return False
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(target.name + ".tmp")
+    tmp.write_text(json.dumps({"session_id": session, "scope": SCOPE,
+                               "time": logs.now().isoformat(timespec="milliseconds")}), encoding="utf-8")
+    os.replace(tmp, target)
+    return True
+
+
+def _read_permit(file: Path):
+    """(session id, age in seconds) of a messaging-scope permit file; None when it cannot be read or is no such permit."""
+    try:
+        data = json.loads(file.read_text(encoding="utf-8"))
+        moment = datetime.datetime.fromisoformat(data["time"])
+        moment = moment if moment.tzinfo else moment.replace(tzinfo=datetime.timezone.utc)
+        session = data.get("session_id")
+        if data.get("scope") == SCOPE and isinstance(session, str) and session:
+            return session, (logs.now() - moment).total_seconds()
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        pass
+    return None
+
+
+def _fresh(age: float) -> bool:
+    return -5 <= age <= cardtool.PERMIT_SECONDS
+
+
+def _consume(file: Path) -> None:
+    """A permit is used once: the file is taken away whatever it held."""
+    try:
+        os.remove(file)
+    except OSError:
+        pass
+
+
+def take_message_permit(state, session) -> Optional[str]:
+    """The session id inside `permits/<session>.json`, once: the file is consumed whatever it holds. None when there is none,
+    it is no messaging permit, it is older than `cardtool.PERMIT_SECONDS`, or it cannot be read. Only this one file is opened."""
+    target = _permit_file(state, session)
+    if target is None:
+        return None
+    found = _read_permit(target)
+    _consume(target)
+    return found[0] if found and _fresh(found[1]) else None
+
+
+def take_latest_message_permit(state) -> Optional[str]:
+    """The session id of the most recent fresh messaging permit of any session, once (that file is consumed); the expired
+    messaging permits are consumed too. None when there is none. The caller asks only when the variable is unset and the end
+    date has not passed: this is the transition's accepted limit, two sessions at once can take each other's permit."""
+    folder = Path(state) / cardtool.PERMITS
+    try:
+        files = [f for f in folder.iterdir() if f.is_file() and f.name.endswith(".json")]
+    except OSError:
+        return None
+    best = None
+    for file in files:
+        found = _read_permit(file)
+        if found is None:
+            continue
+        if not _fresh(found[1]):
+            _consume(file)
+        elif best is None or found[1] < best[1]:
+            best = (found[0], found[1], file)
+    if best is None:
+        return None
+    _consume(best[2])
+    return best[0]
 
 
 # --- who is who ---------------------------------------------------------------------------------------------------
@@ -167,7 +271,7 @@ def _dead_letter(root, profile, shared, sender, sender_role, to, kind, body, rep
             "no session of that name or id was ever seen" if why == "unknown" else "that session was last seen too "
             "long ago") + f"); it is in {DEAD}. `mkway board` lists the sessions that are alive")
         try:
-            leads.append_notice(shared, lead, text, now=now)
+            leads.append_notice(shared, lead, text, now=now, by=sender)
             told = " and your lead was told" if lead != sender else " and a notice is in your inbox"
         except leads.LeadError:
             pass
@@ -193,6 +297,9 @@ def _topology(sender, sender_role: Role, target, target_role: Role, kind: str) -
     if sender_role.kind == "lead":
         mine = target_role.kind == "builder" and target_role.lead == sender
         if target_role.kind != "lead" and not mine:
+            if kind == ORDER and target_role.kind == "none" and not target_role.card:
+                refuse(f"order refused: {target} holds no card. Start a new builder session with the order as its "
+                       f"first prompt (mkcl), one card = one session.")
             refuse("a lead writes to another lead or to a builder of a card it ordered; `mkway board` shows its "
                    "builders and the leads")
     elif sender_role.kind == "builder":
@@ -226,10 +333,11 @@ class Sent:
     root: str
 
 
-def send(root, profile, shared, sender, to, kind, body, reply_to=None, now=None) -> Sent:
+def send(root, profile, shared, sender, to, kind, body, reply_to=None, now=None, record=None) -> Sent:
     """Deliver one message: the row goes to the recipient's inbox; the caller prints the ping. Raises MessageError with
     the reason id (`message-empty`, `message-reply-unknown`, `message-ambiguous`, `message-dead-letter` after the dead
-    letter is written, `message-topology`, `message-duplicate`)."""
+    letter is written, `message-topology`, `message-duplicate`). `record` (R279c Q3): a function of the row, called BEFORE
+    the row is delivered; a record that cannot be written raises `send-record-failed` and nothing is delivered."""
     moment = _now(now)
     settings = profiles.messaging_settings(profile)
     if kind not in KINDS:
@@ -246,8 +354,35 @@ def send(root, profile, shared, sender, to, kind, body, reply_to=None, now=None)
     _topology(sender, sender_role, target, role_of(root, profile, shared, target), kind)
     _duplicate(shared, sender, target, body, settings["duplicate_window_hours"], moment)
     row = make_row(sender, target, kind, body, reply_to, moment)
+    if record is not None:
+        _written_first(lambda: record(row), "send", shared)
     append_row(shared, row)
     return Sent(row, target, target_root)
+
+
+def _written_first(write, what: str, shared) -> None:
+    """R279c Q3: the record is written before the action; an OSError is `send-record-failed` (the id of a send and of an
+    ack), and the text names the file, the state folder and the way out."""
+    try:
+        write()
+    except OSError as exc:
+        done = "nothing is delivered" if what == "send" else "the row stays unacked"
+        raise MessageError("send-record-failed", f"the record of this {what} could not be written to "
+                                                 f"{Path(shared) / RECORD} ({exc.__class__.__name__}), and the record is "
+                                                 f"written first, so {done}. Make the state folder {shared} writable (free "
+                                                 f"space, rights, no folder in place of the file), then run the command "
+                                                 f"again")
+
+
+def ack(shared, session: Optional[str], row_id: str) -> dict:
+    """Acknowledge one row (`session` None: the owner, any inbox), record first (R279c Q3): when the row exists and is
+    unacked in the scope, its record row is written, and only then is the row acked; a record that cannot be written is
+    `send-record-failed` and the row stays unacked. A row that cannot be acked for its own cause (`ack-unknown`,
+    `ack-not-yours`) keeps that reason and writes no record."""
+    rows = leads.all_rows(shared) if session is None else leads.inbox_rows(shared, session)
+    if any(r.get("id") == row_id and r.get("ack_ts") is None for r in rows):
+        _written_first(lambda: record_ack(shared, row_id, session), "ack", shared)
+    return leads.ack(shared, session, row_id)
 
 
 # --- reading ------------------------------------------------------------------------------------------------------
@@ -285,6 +420,124 @@ def show_lines(row: dict) -> list:
             f"acked {row.get('ack_ts') or 'no'}", "body:", str(row.get("body"))]
 
 
+def record_send(shared, row: dict, session: str, file, now=None) -> None:
+    """Record R1 (ruling R279 Q1): one engine-written row for each delivered send, in `<shared>/message-record.jsonl`: the
+    sender's session id, the recipient, the file as named (`--text` for the text form), the sha256 of the body and a time.
+    The inbox file alone is not the record: a session can rewrite its own copy of a row."""
+    logs.append_jsonl(Path(shared) / RECORD, {
+        "event": "send", "id": row["id"], "session": session, "to": row["to"], "file": file,
+        "sha256": hashlib.sha256(str(row["body"]).encode("utf-8")).hexdigest(),
+        "ts": _now(now).isoformat(timespec="milliseconds")})
+
+
+def record_ack(shared, row_id: str, session: Optional[str], now=None) -> None:
+    """Record R1: one engine-written row for each acknowledgement: the acking session (`owner` for the owner's terminal)
+    and the row id."""
+    logs.append_jsonl(Path(shared) / RECORD, {"event": "ack", "id": row_id, "session": session or "owner",
+                                              "ts": _now(now).isoformat(timespec="milliseconds")})
+
+
+def sends_by(shared, session: str) -> list:
+    """MW-128: the times of the `mkway send` calls of this session, from the message record (event `send`). The inbox write the
+    Stop hook makes itself is a row of event `refusal-delivery` and is no send."""
+    try:
+        lines = (Path(shared) / RECORD).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    out = []
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except (ValueError, AttributeError):
+            continue
+        if isinstance(row, dict) and row.get("event") == "send" and row.get("session") == session:
+            out.append(row.get("ts"))
+    return out
+
+
+def orderer_of(root, profile, session) -> Optional[str]:
+    """MW-128: the value of the register's orderer column for the card this session holds; None when the session holds no card,
+    or the cell is empty or names the owner (the owner is no session an inbox row can go to)."""
+    found = _held_in(root, profile, session)
+    if not found or not found[1] or found[1] == register.OWNER:
+        return None
+    return found[1]
+
+
+def sends_to(shared, session: str) -> list:
+    """MW-132 (R1-6): this session's `mkway send` records as (time, recipient), oldest first, from the message record (event
+    `send`). `sends_by` stays as MW-128 reads it. The engine's own inbox writes (events `refusal-delivery`, `handoff-notice`) are
+    no send."""
+    try:
+        lines = (Path(shared) / RECORD).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    out = []
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except (ValueError, AttributeError):
+            continue
+        if isinstance(row, dict) and row.get("event") == "send" and row.get("session") == session:
+            out.append((row.get("ts"), row.get("to")))
+    return out
+
+
+def held_card(root, profile, session):
+    """MW-132 (R1-7, R2-22): (card id, orderer) of the card the session holds in `root`; None when it holds none. The orderer is the
+    register's orderer cell, the owner when the cell is empty. Unlike `_held_in` this raises when the records or the register cannot
+    be read, so the caller can tell a failed read from «no card» and from «no orderer»."""
+    state = profiles.state_dir(root, profile)
+    card = records.session_card(state, session, register.closed_ids(root, profile))
+    if not card:
+        return None
+    row = register.find(register.read(root, profile), card)
+    return card, ((row.get(register.ORDERED) or register.OWNER) if row else register.OWNER)
+
+
+HANDOFF_EVENT = "handoff-notice"  # MW-132 (R1-3): the record row of the inbox write the Stop hook makes for a silent turn end
+
+
+def record_handoff(shared, row: dict, session: str, card: str, now=None) -> None:
+    """MW-132 (R1-3): the message record of the handoff notice: event `handoff-notice`, so it is told apart from a `send` of the
+    session (`sends_by` and `sends_to` never count it) and from a `refusal-delivery`."""
+    logs.append_jsonl(Path(shared) / RECORD, {
+        "event": HANDOFF_EVENT, "id": row["id"], "session": session, "to": row["to"], "card": card,
+        "ts": _now(now).isoformat(timespec="milliseconds")})
+
+
+def send_handoff(root, profile, shared, session, to, body, card, now=None) -> Sent:
+    """MW-132 (R338, R338a): the one handoff notice, a `notice` row from this session to its orderer. It is the engine's own write,
+    so the star topology of `send` is not asked: an orderer that is a seen session but no registered lead still gets it (only the
+    block is dropped for such a role). Raises `MessageError` when the orderer is not a live session; the record is written first."""
+    moment = _now(now)
+    settings = profiles.messaging_settings(profile)
+    target, why, target_root = resolve(shared, to, settings["dead_hours"], moment)
+    if why is not None:
+        raise MessageError("message-dead-letter", f"{to!r} is not a live session ({why}); the handoff notice was not written")
+    row = make_row(session, target, NOTICE, body, None, moment)
+    _written_first(lambda: record_handoff(shared, row, session, card, now), "send", shared)
+    append_row(shared, row)
+    return Sent(row, target, target_root)
+
+
+def record_refusal(shared, row: dict, session: str, refusal_id: str, now=None) -> None:
+    """MW-128: the message record of the inbox write the Stop hook makes itself: event `refusal-delivery`, so it is told apart
+    from a `send` of the session."""
+    logs.append_jsonl(Path(shared) / RECORD, {
+        "event": REFUSAL_EVENT, "id": row["id"], "session": session, "to": row["to"], "refusal": refusal_id,
+        "ts": _now(now).isoformat(timespec="milliseconds")})
+
+
+def send_refusal(root, profile, shared, session, to, command, line, refusal_id, now=None) -> Sent:
+    """MW-128 (R301, R301a): the one inbox refusal record, a `notice` from this session to its orderer through `send` (so it
+    shows in the orderer's normal inbox and `mkway inbox <id>` reads it). Raises what `send` raises when it cannot be written."""
+    import core_refusal
+    body = core_refusal.inbox_body(session, command, line, refusal_id)
+    return send(root, profile, shared, session, to, NOTICE, body, now=now,
+                record=lambda row: record_refusal(shared, row, session, refusal_id, now))
+
+
 def pinged(shared, row_id: str) -> bool:
     try:
         lines = (Path(shared) / PINGS).read_text(encoding="utf-8").splitlines()
@@ -302,6 +555,50 @@ def pinged(shared, row_id: str) -> bool:
 def record_ping(shared, row_id: str, session: str, now=None) -> None:
     logs.append_jsonl(Path(shared) / PINGS, {"id": row_id, "session": session,
                                              "ts": _now(now).isoformat(timespec="milliseconds")})
+
+
+def engine_row(shared, row_id: str, session: str):
+    """MW-076 (R187, R189, R197 B): the row `row_id` when the engine wrote it (a notice) for another session and `session`
+    is the one that caused it: the record row names it as `by`. A notice with no `by` is nobody's to ping (see
+    `engine_no_by`), and a row caused by another session is None."""
+    found = locate(shared, row_id)
+    if not found or found[0].get("from") != leads.ENGINE or found[1] == session:
+        return None
+    record = next((r for r in leads.inbox_writes(shared) if r.get("id") == row_id), {})
+    return found[0] if record.get("by") == session else None
+
+
+def engine_no_by(shared, row_id: str) -> bool:
+    """MW-076 (R197 B): True when the row `row_id` is a notice the engine wrote and its record has no `by`."""
+    found = locate(shared, row_id)
+    if not found or found[0].get("from") != leads.ENGINE:
+        return False
+    record = next((r for r in leads.inbox_writes(shared) if r.get("id") == row_id), {})
+    return not record.get("by")
+
+
+def sessions_data(root, profile):
+    """The parsed mkcl `sessions.json` that the profile key `sessions.file` names (read only); None when there is no key,
+    or the file is missing or cannot be read (the caller falls back silently)."""
+    named = profiles.sessions_file(profile)
+    if not named:
+        return None
+    path = Path(named)
+    path = path if path.is_absolute() else Path(root) / path
+    try:
+        return json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return None
+
+
+def target_name(root, profile, shared, target, sender=None):
+    """The SendMessage name of the session `target` (R185, in this order): the `name` of its row in the lead register,
+    else the name in mkcl's sessions file (by its resume id, else the starter of the sender's card); None when unknown."""
+    for row in leads.read(shared)["leads"]:
+        if row["session_id"] == target and isinstance(row.get("name"), str) and row["name"].strip():
+            return row["name"].strip()
+    card = role_of(root, profile, shared, sender).card if sender else None
+    return core_ping.sessions_name(sessions_data(root, profile), target, card)
 
 
 def row_from(shared, row_id: str, session: str):
@@ -374,7 +671,7 @@ def board_lines(root, profile) -> list:
         out.append(f"  {sid}  {_role_text(role_of(root, profile, shared, sid))}  root {where or NE}  last seen "
                    f"{stamp or NE}  unacked {len(rows)} (orders {sum(1 for r in rows if r.get('kind') == ORDER)})")
         out += [f"    unacked {r.get('id')} {str(r.get('ts'))[:16]} {r.get('kind')} from {r.get('from')}: "
-                f"{first_line(r.get('body'))}" for r in rows[:SHOWN * 2]]
+                f"{first_line(r.get('body'))} (age {board.age_text(r.get('ts'), _now(None))})" for r in rows]  # MW-112 (R270a): every one, with its age
     if not ids:
         out.append("  no session seen")
     out.append("cards:")
@@ -388,7 +685,11 @@ def board_lines(root, profile) -> list:
                              f"{row.get(register.ORDERED) or register.OWNER}  held by {held.get(row['id']) or 'none'}")
     except Exception:
         cards = []
-    out += cards or ["  no card"]
+    try:  # MW-112 (R3): old red, uncommitted files, a card with no result, a failed agent record, under the cards
+        extra = [f"  {line}" for line in board.lines(root, profile)]
+    except Exception:
+        extra = []
+    out += (cards + extra) or ["  no card"]
     out.append("asks:")
     try:
         out += [f"  {line}" for line in asks.board_lines(root, profile)]

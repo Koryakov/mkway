@@ -172,13 +172,3 @@ def test_lead_add_names_a_session_known_from_the_shared_file(tmp_path):
         encoding="utf-8")
     assert cli(linked, "lead", "add", "far")[0] == 0
     assert leads.is_lead(profiles.shared_state_dir(main, _profile(main)), "far-away-1")
-
-
-@pytest.mark.engine_repo  # MW-025: the README is not in an installed copy
-def test_the_readme_and_keys_name_the_shared_files():
-    """E26: the lead role section names `sessions.jsonl`, the shared state folder and the linked work tree."""
-    from _engine import REPO
-    text = (REPO / "README.md").read_text(encoding="utf-8")
-    section = " ".join(text.split("\n## The lead role\n", 1)[1].split("\n## ", 1)[0].split())
-    for needed in ("`sessions.jsonl`", "shared state folder", "linked work tree", "`mkway sessions`", "`root`"):
-        assert needed in section, needed

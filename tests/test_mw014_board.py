@@ -25,9 +25,7 @@ def _row(root, ask_id):
 
 
 def test_the_board_has_one_row_per_ask_file(task):
-    """E10: `mkway asks`, from any terminal (the owner's or a session's), prints one row per ask file, oldest first:
-    id, card, age, deadline, default, status, blocked part. The card is the one the writing session holds, `not
-    established` when no session wrote it. Catches: a board that hides answered asks, shows no age, or names no card."""
+    """Catches: a board that hides answered asks, shows no age, or names no card (E10: mkway asks prints one row per ask file, oldest first, with id, card, age, deadline, default, status and blocked part)."""
     records.append(task / "mkway" / "state", "s1", "take", "CARD-001")
     write_ask(task, "old", session="s1", age_seconds=2 * 3600 + 120, deadline=PAST, default="keep A",
               blocked="part x")
@@ -37,22 +35,26 @@ def test_the_board_has_one_row_per_ask_file(task):
                                  "status open | blocked part x")
     assert _row(task, "new") == ("new | card not established | age 5m | deadline none | default none | "
                                  "status open | blocked none")
-    assert _row(task, "done").startswith("done | card not established | age 3d | ") and "status answered" in _row(
-        task, "done")
-    for session in (False, True):
-        code, out, _err = cli(task, "asks", session=session)
-        assert code == 0
-        assert [x.split(" |")[0] for x in out.splitlines()] == ["done", "old", "new"]
+    assert _row(task, "done").startswith("done | card not established | age 3d | ")
+    assert "status answered" in _row(task, "done")
+    code, out, _err = cli(task, "asks", session=False)
+    assert code == 0
+    assert [x.split(" |")[0] for x in out.splitlines()] == ["done", "old", "new"]
+    code, out, _err = cli(task, "asks", session=True)
+    assert code == 0
+    assert [x.split(" |")[0] for x in out.splitlines()] == ["done", "old", "new"]
 
 
 def test_the_board_with_no_ask_and_with_an_unreadable_one(task):
-    """E10: no asks folder or no ask file prints `no ask files`; an ask with a hand-edited bad field is a row that says
-    `not established`, never a crash. Catches: a board that fails on the owner's own edit."""
+    """Catches: a board that fails on the owner's own edit (E10: no asks folder or no ask file prints `no ask files`; an ask with a hand-edited bad field is a row that says not established)."""
     code, out, _err = cli(task, "asks")
-    assert code == 0 and out.strip() == "no ask files"
+    assert code == 0
+    assert out.strip() == "no ask files"
     (_mw014.asks_folder(task) / "bad_ask.md").write_text("just text\ndeadline: soon\n", encoding="utf-8")
     line = _row(task, "bad")
-    assert "default not established" in line and "status not established" in line and "deadline soon" in line
+    assert "default not established" in line
+    assert "status not established" in line
+    assert "deadline soon" in line
 
 
 def _context(root, session="s1"):
@@ -68,10 +70,7 @@ def _asks_line(block):
 
 
 def test_the_start_block_counts_the_open_asks_with_their_age(task):
-    """E11: the start block has `open asks: N (oldest <age>); past deadline: M; defaults taken since the owner's last
-    re-seal: K`: N counts the asks with status open, the age is the oldest one's, M those past their deadline, K the
-    `ask-default` records at or after the baseline of the owner's last `card resync` (all of them with no baseline).
-    Catches: a block that counts answered asks, or a count of defaults that never starts again after a re-seal."""
+    """Catches: a block that counts answered asks, or a count of defaults that never starts again after a re-seal (E11: the start block has open asks N with the oldest age, past deadline M, and defaults taken since the last re-seal K)."""
     assert _asks_line(_context(task)) == ("open asks: 0 (oldest none); past deadline: 0; defaults taken since the "
                                           "owner's last re-seal: 0")
     write_ask(task, "a", age_seconds=2 * 3600 + 60, deadline=PAST)
@@ -95,10 +94,7 @@ def _prompt(root, session="s1"):
 
 
 def test_the_reminder_is_for_the_session_that_owns_an_ask_past_its_deadline(task):
-    """E12: at the next prompt a session that owns an open ask past its deadline gets a warn `ask-past-deadline` with
-    the text «ask <id> is past its deadline: take the default with `mkway ask default <id>` if reversible, else keep
-    waiting»; one line for each such ask. No reminder for another session, an ask before its deadline, an ask with no
-    deadline, or an ask that is not open. Catches: a reminder to the wrong session, or one that never stops."""
+    """Catches: a reminder to the wrong session, or one that never stops (E12: at the next prompt a session that owns an open ask past its deadline gets one warn ask-past-deadline line per such ask; no reminder for another session, an ask before its deadline, an ask with no deadline, or an ask that is not open)."""
     write_ask(task, "late", session="s1", deadline=PAST)
     write_ask(task, "late2", session="s1", deadline=PAST)
     write_ask(task, "soon", session="s1", deadline=_mw014.FAR)
@@ -106,7 +102,8 @@ def test_the_reminder_is_for_the_session_that_owns_an_ask_past_its_deadline(task
     write_ask(task, "shut", session="s1", deadline=PAST, status="answered")
     write_ask(task, "other", session="s2", deadline=PAST)
     v = _prompt(task)
-    assert v.kind == "warn" and v.reason_id == "ask-past-deadline"
+    assert v.kind == "warn"
+    assert v.reason_id == "ask-past-deadline"
     lines = v.message.splitlines()
     assert lines == [f"ask {i} is past its deadline: take the default with `mkway ask default {i}` if reversible, "
                      f"else keep waiting" for i in ("late", "late2")]
@@ -116,9 +113,7 @@ def test_the_reminder_is_for_the_session_that_owns_an_ask_past_its_deadline(task
 
 
 def test_the_prompt_group_carries_the_reminder_through_the_dispatcher(tmp_path):
-    """E12: through the real manifest the `prompt` group puts the reminder into the prompt's context (entry
-    `owner_ask.remind`, `onFailure: none`, no matcher); `gates.owner_ask.on: false` silences it. Catches: a reminder
-    that is written but not wired."""
+    """Catches: a reminder that is written but not wired (E12: through the real manifest the prompt group puts the reminder into the prompt context; gates.owner_ask.on false silences it)."""
     root = task_root(tmp_path)
     write_ask(root, "late", session="s1", deadline=PAST)
     payload = {"session_id": "s1", "hook_event_name": "UserPromptSubmit", "prompt": "go on"}
@@ -126,7 +121,8 @@ def test_the_prompt_group_carries_the_reminder_through_the_dispatcher(tmp_path):
     res = dispatch.run("UserPromptSubmit", "prompt", json.dumps(payload), env=env)
     context = json.loads(res.stdout)["hookSpecificOutput"]["additionalContext"]
     assert "[mkway owner_ask.remind ask-past-deadline] ask late is past its deadline" in context
-    assert res.exit_code == 0 and json.loads(res.stdout).get("decision") is None
+    assert res.exit_code == 0
+    assert json.loads(res.stdout).get("decision") is None
     assert ("owner_ask.remind", "ask-past-deadline") in [(r["gate"], r["reason_id"]) for r in jsonl(
         root / "mkway" / "state" / "refusals.jsonl")]
     profile = json.loads((root / "mkway" / "profile.json").read_text(encoding="utf-8"))

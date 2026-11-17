@@ -82,14 +82,29 @@ def gate_call(function, root: Path, *, tool="Edit", tool_input=None, session="s1
     return function(event, ctx)
 
 
-def task_root(tmp_path: Path, *, vcs="none", gates=None, name="task", **over) -> Path:
-    """A synthetic task root with a valid profile (prefix CARD) and the bundle folders (card MW-003)."""
+def agent_file(base: Path, name: str, tools_line=None) -> Path:
+    """`<base>/.claude/agents/<name>.md`, a synthetic agent definition (card MW-071); `tools_line` is the text after
+    `tools:`, or None for a definition with no tools line."""
+    path = base / ".claude" / "agents" / f"{name}.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tools = "" if tools_line is None else f"tools: {tools_line}\n"
+    path.write_text(f"---\nname: {name}\ndescription: synthetic\n{tools}---\nA synthetic agent.\n", encoding="utf-8")
+    return path
+
+
+def task_root(tmp_path: Path, *, vcs="none", gates=None, name="task", agent_tools="Read, Grep", **over) -> Path:
+    """A synthetic task root with a valid profile (prefix CARD) and the bundle folders (card MW-003). Each type the profile
+    names in `outbox.checkers` gets an agent definition in the root's `.claude/agents` listing `agent_tools` (card
+    MW-071, decision: R180); `agent_tools=None` writes none."""
     root = tmp_path / name
     for sub in ("cards", "ledger", "locks", "state"):
         (root / "mkway" / sub).mkdir(parents=True, exist_ok=True)
     profile = make_profile(gates, vcs=vcs, ids={"card_prefix": "CARD"})
     profile.update(over)
     write_profile(root, profile)
+    if agent_tools is not None:
+        for checker in (profile.get("outbox") or {}).get("checkers") or []:
+            agent_file(root, checker, agent_tools)
     return root
 
 

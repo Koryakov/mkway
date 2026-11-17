@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from _commit_fixture import git, save
+import _docs as docs
 from _engine import REPO, cli
 from _mw020 import built, deliverable, green, head, head_tree, index_digest, make_root, rows
 from test_mw021_command import _task
@@ -104,7 +105,7 @@ def test_the_register_changelog_and_card_name_the_card():
     `VERSION` stays `0.2.0`. Catches: a fix that leaves the register and the changelog behind."""
     register = (REPO / "cards" / "REGISTER.md").read_text(encoding="utf-8")
     assert re.search(r"^\| MW-023 \|.*`cards/MW-023-[a-z0-9-]+`", register, re.M)
-    section = (REPO / "CHANGELOG.md").read_text(encoding="utf-8").split("## 0.2.0", 1)[1].split("## 0.1.0", 1)[0]
+    section = docs.changelog_section((REPO / "CHANGELOG.md").read_text(encoding="utf-8"), "MW-023")
     assert "MW-023" in section
     assert list((REPO / "cards").glob("MW-023-*/CARD.md"))
-    assert (REPO / "VERSION").read_text(encoding="utf-8").strip() == "0.2.7"  # changed by MW-027: 0.2.7
+    docs.assert_version_file()

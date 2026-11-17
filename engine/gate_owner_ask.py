@@ -19,190 +19,107 @@ function (manifest `owner_ask.edit` and `owner_ask.stop`, one profile switch `ga
   cannot trap a session. The transcript is the file the hook input names (`transcript_path`); when it cannot be
   read, the gate cannot see a write, so a marker line is still blocked and the text says so.
 
-The asks folder, the marker strings and the source names are profile keys with defaults (`profiles.owner_ask`); no
-task name and no natural-language word is in this file. The line shapes (`kind:`, `checked:`, `>`) are the file format.
+The decisions are `engine/core_ask.py` (card MW-065): pure functions of a Facts record. This module is the shell: it reads
+the facts (the settings, the path as the engine reads it, the sources file, the ask file, the transcript, the files that
+exist, the records), calls the decision, turns it into a verdict, and writes the post-step record. The asks folder, the
+marker strings and the source names are profile keys with defaults (`profiles.owner_ask`); no task name and no
+natural-language word is in this file.
 """
 from __future__ import annotations
 
+import dataclasses
 import json
-import re
 from pathlib import Path
 
 import asks
+import core_ask as core
 import gate
-import helpers
 import profiles
+import records
 
-WRITE_TOOLS = ("Write", "Edit", "MultiEdit")
-ASK_FILE = re.compile(r"^(?P<name>.+)_ask\.md$", re.I)
-SOURCES_SUFFIX = "_sources.md"
-KINDS = "substance|session|lock"
-KIND_LINE = re.compile(r"^kind:[ \t]*(substance|session|lock)[ \t\r]*$", re.M | re.I)
-SESSION_LINE = re.compile(r"^checked:[ \t]*ListAgents\b", re.M | re.I)
-LOCK_LINE = re.compile(r"^checked:[ \t]*\S", re.M | re.I)
-HOW = ("Before an ask to the owner, write down what was checked: a sources file beside the ask, with the lines of "
-       "its kind (README, «Questions to the owner»)")
+WRITE_TOOLS = core.WRITE_TOOLS
+HOW = core.HOW
 
+
+def as_verdict(decision) -> gate.Verdict:
+    """The gate verdict of a core decision (the search and the outbox gates use it too)."""
+    if decision.kind == "allow":
+        return gate.allow()
+    return gate.Verdict(decision.kind, decision.reason, decision.text)
+
+
+def read_text(path, default=""):
+    """The text of a file as the gates read it (undecodable bytes replaced); `default` when it cannot be read."""
+    try:
+        return Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return default
+
+
+# ---- the edit gate ------------------------------------------------------------------------------------------------
 
 def _ask_target(ctx, settings, path):
     """(repo-relative path, name) when `path` is `<asks dir>/<name>_ask.md`, else None."""
     if not isinstance(path, str) or not path:
         return None
-    rel = ctx.norm(path)
-    if rel is None or rel == ".":
-        return None
-    folder, _, base = rel.rpartition("/")
-    wanted = "" if settings["dir"] == "." else settings["dir"]
-    match = ASK_FILE.match(base)
-    if match is None or helpers._fold(folder) != helpers._fold(wanted):
-        return None
-    return rel, match.group("name")
+    return core.ask_target(ctx.norm(path), settings["dir"])
 
 
-def _lines(text: str, source: str):
-    """(count line found, quote line found) for one source name."""
-    name = re.escape(source)
-    count = re.search(rf"^{name}:[ \t]*\d+[ \t]+contradictions?\b", text, re.M | re.I)
-    quote = re.search(rf"^>[ \t]*{name}:[ \t]*\S", text, re.M | re.I)
-    return count is not None, quote is not None
-
-
-LEDGER_SOURCE = "ledger"  # MW-008: the source of the past decisions has its own lines, not the contradictions form
-LEDGER_COUNT = re.compile(r"^ledger:[ \t]*(\d+)[ \t]+hits?\b", re.M | re.I)
-LEDGER_QUOTE = re.compile(r"^>[ \t]*ledger:[ \t]*\S", re.M | re.I)
-SEARCH_LINE = re.compile(r"^search:[ \t]*\S", re.M | re.I)
-
-
-def _ledger_missing(text: str) -> list:
-    """The lines a `ledger` source still needs: `ledger: N hits`; with N above 0 a `> ledger: <verbatim>` line; with N
-    0 a line `search: <record id>` (the record of the `mkway search` that found nothing)."""
-    count = LEDGER_COUNT.search(text)
-    if count is None:
-        return ["ledger: N hits"]
-    if int(count.group(1)) > 0:
-        return [] if LEDGER_QUOTE.search(text) else ["> ledger: <verbatim quote>"]
-    return [] if SEARCH_LINE.search(text) else ["search: <record id>"]
-
-
-def sources_problem(root, rel: str, name: str, settings):
-    """None when the sources file beside the ask holds what its kind needs, else (reason id, message)."""
-    folder = rel.rpartition("/")[0]
-    shown = f"{name}{SOURCES_SUFFIX}"
-    try:
-        text = (Path(root) / folder / shown).read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return "ask-sources-missing", f"{shown} does not exist beside the ask (or cannot be read). {HOW}"
-    found = KIND_LINE.search(text)
-    if not found:
-        return "ask-sources-kind", f"{shown} has no line `kind: {KINDS}`. {HOW}"
-    kind = found.group(1).lower()
-    missing = []
-    if kind == "substance":
-        if LEDGER_SOURCE in settings["sources"]:
-            missing += _ledger_missing(text)
-        pairs = [(s, *_lines(text, s)) for s in settings["sources"] if s != LEDGER_SOURCE]
-        missing += [f"{s}: N contradictions" for s, count, _quote in pairs if not count]
-        missing += [f"> {s}: <verbatim quote>" for s, _count, quote in pairs if not quote]
-    elif kind == "session":
-        missing += [] if SESSION_LINE.search(text) else ["checked: ListAgents"]
-    elif not LOCK_LINE.search(text):
-        missing.append("checked: <lock state>")
-    if missing:
-        return "ask-sources-lines", f"{shown} (kind {kind}) lacks " + ", ".join(f"`{m}`" for m in missing) + f". {HOW}"
-    return None
-
-
-QUESTION_TOOL = "AskUserQuestion"
-FIELDS_HOW = ("An ask carries five field lines, and the session goes on with the work that does not wait for the "
-              "answer (README, «Asks that do not stop the work»)")
-
-
-def _resulting_text(ctx, rel: str) -> str:
-    """The text of the ask file after this write: a Write's content; for an Edit or a MultiEdit the file on disk with
-    its edits applied in order (an edit whose text is not found changes nothing, as the tool would refuse it)."""
-    tool_input = ctx.tool_input
-    if ctx.tool_name == "Write":
-        content = tool_input.get("content")
-        return content if isinstance(content, str) else ""
-    try:
-        text = (Path(ctx.root) / rel).read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        text = ""
-    edits = tool_input.get("edits") if ctx.tool_name == "MultiEdit" else [tool_input]
-    for edit in edits if isinstance(edits, list) else []:
-        old, new = (edit.get("old_string"), edit.get("new_string")) if isinstance(edit, dict) else (None, None)
-        if not isinstance(old, str) or not isinstance(new, str):
-            continue
-        if old == "":
-            text = new if text == "" else text
-        elif old in text:
-            text = text.replace(old, new) if edit.get("replace_all") else text.replace(old, new, 1)
-    return text
-
-
-def fields_problem(ctx, rel: str):
-    """None when the ask file this write leaves holds its five lines, else (`ask-fields-missing`, text naming each)."""
-    missing = asks.field_problems(_resulting_text(ctx, rel))
-    if not missing:
-        return None
-    shown = ", ".join(f"`{asks.SHAPES[m]}`" for m in missing)
-    return "ask-fields-missing", f"{Path(rel).name} lacks {shown}. {FIELDS_HOW}"
-
-
-def open_problem(ctx, rel: str, name: str, settings):
-    """None unless this write starts a NEW ask file while the session already has `owner_ask.max_open` asks with
-    `status: open`: then (`ask-already-open`, text: add to the open ask, or wait). A write to an ask that is already on
-    disk is an addition to it. A call with no session id is never refused here."""
-    if not ctx.session_id or (Path(ctx.root) / rel).exists():
-        return None
-    mine = asks.open_of_session(ctx.root, ctx.profile, ctx.session_id)
-    if len(mine) < settings["max_open"]:
-        return None
-    return "ask-already-open", (f"this session already has {len(mine)} open ask(s): {', '.join(mine)} "
-                                f"(owner_ask.max_open {settings['max_open']}): add to the open ask, or wait for its "
-                                f"answer; do not write a second ask. {FIELDS_HOW}")
-
-
-def _question(ctx):
-    """`AskUserQuestion`: refused `ask-tool-off` unless `owner_ask.tool_allowed`; the text names the file route."""
+def _edit_facts(ctx):
+    """The call's facts and the ask target (None when the path is not an ask path). Raises when the settings or the path
+    cannot be read: the caller then allows (not provably an ask path)."""
     settings = profiles.owner_ask(ctx.profile)
-    if settings["tool_allowed"]:
-        return gate.allow()
-    return gate.refuse("ask-tool-off", (
-        f"the pop-up question tool is off: it stops the work until the owner answers. Ask by writing "
-        f"{settings['dir']}/<name>_ask.md with its sources file, with the lines `default: <text or none>`, "
-        f"`deadline: <ISO local time or none>`, `blocked: <what waits, or none>`, `reversible: yes|no` and "
-        f"`status: open`, then go on with the work that does not depend on the answer (README, «Asks that do not stop "
-        f"the work»)"))
+    tool_input = ctx.tool_input
+    path = tool_input.get("file_path") if isinstance(tool_input, dict) else None
+    rel = ctx.norm(path) if ctx.tool_name in WRITE_TOOLS and isinstance(path, str) and path else None
+    facts = core.EditFacts(tool_name=ctx.tool_name, tool_input=tool_input, rel=rel, dir=settings["dir"],
+                           sources=tuple(settings["sources"]), max_open=settings["max_open"],
+                           tool_allowed=settings["tool_allowed"], session_id=ctx.session_id)
+    return facts, core.ask_target(rel, settings["dir"])
+
+
+def _ask_file_facts(ctx, rel: str, name: str) -> dict:
+    """The facts only an ask path needs: the sources file beside the ask, the ask file as it is on disk (an Edit is
+    applied to it), whether it exists, and the session's open asks (a failure to read them is named, not raised)."""
+    root = Path(ctx.root)
+    sources = root / rel.rpartition("/")[0] / f"{name}{core.SOURCES_SUFFIX}"
+    exists = (root / rel).exists()
+    found = {"sources_text": read_text(sources, None), "ask_exists": exists,
+             "ask_text": "" if ctx.tool_name == "Write" else read_text(root / rel)}
+    if ctx.session_id and not exists:
+        try:
+            found["open_ids"] = tuple(asks.open_of_session(ctx.root, ctx.profile, ctx.session_id))
+        except Exception as exc:
+            found["open_error"] = exc.__class__.__name__
+    return found
 
 
 def _edit(ctx):
-    if ctx.tool_name == QUESTION_TOOL:
+    try:
+        facts, target = _edit_facts(ctx)
+    except Exception:  # not provably an ask path: not this gate's write (the settings could not be read)
+        return gate.allow()
+    if target is not None:
         try:
-            return _question(ctx)
-        except Exception:  # the settings could not be read: the tool stays as it was (the search gate still judges it)
-            return gate.allow()
-    if ctx.tool_name not in WRITE_TOOLS or not isinstance(ctx.tool_input, dict):
-        return gate.allow()
+            facts = dataclasses.replace(facts, **_ask_file_facts(ctx, *target))
+        except Exception as exc:  # fail closed, for an ask path only
+            return as_verdict(core.failed_check(exc.__class__.__name__))
+    return as_verdict(core.decide_edit(facts))
+
+
+# ---- the post step and the reminder -------------------------------------------------------------------------------
+
+def _records_path(ctx) -> str:
+    """The records file a failed ask record could not be written to, for the refusal text."""
     try:
-        settings = profiles.owner_ask(ctx.profile)
-        target = _ask_target(ctx, settings, ctx.tool_input.get("file_path"))
-    except Exception:  # not provably an ask path: not this gate's write
-        return gate.allow()
-    if target is None:
-        return gate.allow()
-    rel, name = target
-    try:
-        problem = (sources_problem(ctx.root, rel, name, settings) or fields_problem(ctx, rel)
-                   or open_problem(ctx, rel, name, settings))
-    except Exception as exc:  # fail closed, for an ask path only
-        problem = ("ask-sources-missing", f"the sources check failed ({exc.__class__.__name__}). {HOW}")
-    return gate.refuse(*problem) if problem else gate.allow()
+        return str(Path(profiles.state_dir(ctx.root, ctx.profile)) / records.RECORDS)
+    except Exception:
+        return "records.jsonl in the state folder"
 
 
 def _post(ctx):
-    """PostToolUse on a write of an ask file (MW-014): record which session wrote it, when it has no owner yet. It never
-    refuses: the write already happened (a failed record is a warn, and the one-open rule then cannot see the ask)."""
+    """PostToolUse on a write of an ask file (MW-014): record which session wrote it, when it has no owner yet. The write
+    already happened, but a failed record is a refusal naming the path (R271c-D1): the one-open rule cannot see the ask."""
     if ctx.tool_name not in WRITE_TOOLS or not isinstance(ctx.tool_input, dict):
         return gate.allow()
     try:
@@ -212,8 +129,11 @@ def _post(ctx):
             return gate.allow()
         asks.record_owner(ctx.root, ctx.profile, ctx.session_id, target[1])
     except Exception as exc:
-        return gate.warn("ask-record-failed", f"the ask's owner record could not be written "
-                                              f"({exc.__class__.__name__}); the one-open rule cannot see this ask")
+        return gate.refuse("ask-record-failed", f"the ask's owner record could not be written "
+                                                f"({exc.__class__.__name__}): "
+                                                f"{_records_path(ctx)} is not "
+                                                f"written, so the one-open rule cannot see this ask; report it to the "
+                                                f"operator: the owner repairs the file")
     try:  # the owner's notification: never blocks, always a row
         done = asks.notify(ctx.root, ctx.profile, asks.read(Path(ctx.root) / target[0]))
     except Exception as exc:
@@ -223,10 +143,8 @@ def _post(ctx):
     return gate.log("notify-sent" if done[0] else "notify-failed", done[1])
 
 
-def turn_split(path):
-    """(entries after the last real user message, readable, that user message or None). A real user message is a
-    `user` entry whose content is a string or has a text block; a tool result is not one. A line that is not JSON is
-    skipped. The Stop gate and the search gate (MW-008) both read the turn boundary here."""
+def read_entries(path):
+    """The entries of a transcript file (a line that is not JSON is skipped), or None when it cannot be read."""
     entries = []
     try:
         with open(path, encoding="utf-8", errors="replace") as fh:
@@ -238,61 +156,42 @@ def turn_split(path):
                 if isinstance(entry, dict):
                     entries.append(entry)
     except (OSError, TypeError):
+        return None
+    return entries
+
+
+def turn_split(path):
+    """(entries after the last real user message, readable, that user message or None). The Stop gate and the search
+    gate (MW-008) both read the turn boundary here; the rule is `core_ask.turn_split`."""
+    entries = read_entries(path)
+    if entries is None:
         return [], False, None
-    start = -1
-    for i, entry in enumerate(entries):
-        content = (entry.get("message") or {}).get("content") if isinstance(entry.get("message"), dict) else None
-        if entry.get("type") == "user" and (isinstance(content, str) or (isinstance(content, list) and any(
-                isinstance(b, dict) and b.get("type") == "text" for b in content))):
-            start = i
-    return entries[start + 1:], True, (entries[start] if start >= 0 else None)
+    after, user = core.turn_split(entries)
+    return after, True, user
 
 
-def _turn(path):
-    """(entries after the last real user message, readable)."""
-    entries, readable, _user = turn_split(path)
-    return entries, readable
+# ---- the stop gate ------------------------------------------------------------------------------------------------
 
-
-def _blocks(entries, kind):
-    for entry in entries:
-        message = entry.get("message") if entry.get("type") == "assistant" else None
-        content = message.get("content") if isinstance(message, dict) else None
-        for block in content if isinstance(content, list) else []:
-            if isinstance(block, dict) and block.get("type") == kind:
-                yield block
-
-
-def _wrote_ask(ctx, settings, turn) -> bool:
-    for block in _blocks(turn, "tool_use"):
-        if block.get("name") not in WRITE_TOOLS or not isinstance(block.get("input"), dict):
-            continue
-        target = _ask_target(ctx, settings, block["input"].get("file_path"))
-        if target is not None and (Path(ctx.root) / target[0]).is_file():
-            return True
-    return False
+def _stop_facts(ctx):
+    hook_input = ctx.hook_input if isinstance(ctx.hook_input, dict) else {}
+    if hook_input.get("stop_hook_active"):  # the decision allows at once: nothing else is read
+        return core.StopFacts(hook_active=True, last_message=None, entries=None, markers=(), dir="")
+    settings = profiles.owner_ask(ctx.profile)
+    entries = read_entries(hook_input.get("transcript_path"))
+    rels = {}
+    for block in core.blocks(entries or (), "tool_use"):
+        path = block.get("input", {}).get("file_path") if isinstance(block.get("input"), dict) else None
+        if block.get("name") in WRITE_TOOLS and isinstance(path, str) and path and path not in rels:
+            rels[path] = ctx.norm(path)
+    root = Path(ctx.root)
+    on_disk = frozenset(rel for rel in rels.values() if rel and (root / rel).is_file())
+    return core.StopFacts(hook_active=False, last_message=hook_input.get("last_assistant_message"),
+                          entries=None if entries is None else tuple(entries), markers=tuple(settings["markers"]),
+                          dir=settings["dir"], rels=rels, on_disk=on_disk)
 
 
 def _stop(ctx):
-    hook_input = ctx.hook_input if isinstance(ctx.hook_input, dict) else {}
-    if hook_input.get("stop_hook_active"):
-        return gate.allow()
-    settings = profiles.owner_ask(ctx.profile)
-    turn, readable = _turn(hook_input.get("transcript_path"))
-    final = hook_input.get("last_assistant_message")
-    if not isinstance(final, str):
-        texts = [b["text"] for b in _blocks(turn, "text") if isinstance(b.get("text"), str)]
-        final = texts[-1] if texts else ""
-    markers = "|".join(re.escape(m) for m in settings["markers"])
-    found = re.search(rf"^[ \t]*(?:\*\*)?({markers})", final, re.M)
-    if found is None or _wrote_ask(ctx, settings, turn):
-        return gate.allow()
-    unread = "" if readable else " (the transcript could not be read, so no write could be seen)"
-    return gate.refuse("ask-not-written", (
-        f"the reply has a line that starts with `{found.group(1)}`, but this turn wrote no "
-        f"{settings['dir']}/<name>_ask.md{unread}. An ask goes to the owner only after it is written to that file "
-        f"with its sources file. {HOW}. If what was checked already decides it, do not ask: act, and report it "
-        f"without the marker"))
+    return as_verdict(core.decide_stop(_stop_facts(ctx)))
 
 
 def _remind(ctx):

@@ -117,8 +117,9 @@ def test_a_docs_only_commit_runs_no_tests(proj):
     assert rows(proj) == []
     set_profile(proj, paths={"docs": ["notes/**"]})
     verdict = run_gate(proj)
-    assert reason(verdict) == "commit-tests-failed"
-    assert "tests/test_bad.py::test_bad" in verdict.message
+    assert reason(verdict) == "allow"  # MW108-D1: the suite ran; a red at HEAD in no card's Paths is old red, shown, never blocking
+    assert (verdict.kind, verdict.reason_id) == ("warn", "commit-tests-still-red")  # the helper `reason` shows a warn as allow
+    assert "old red: tests/test_bad.py::test_bad, owner none" in verdict.message
     git(proj, "reset", "-q")
     stage(proj, "notes/a.txt", "a\n")
     assert reason(run_gate(proj)) == "allow"
@@ -248,12 +249,22 @@ def test_the_gate_is_in_the_shell_group_after_the_lock_gate_and_has_a_switch(pro
     # changed by the port onto MW-009: the shell group also holds `delete`, after `commit_files` and before the slow run
     # changed by MW-017 (E8): the shell group also holds `lead.shell`, first, so a lead's refusal names the lead rule
     # changed by MW-034 (E8): `touched.shell` is gone with the write record
-    assert names == ["lead.shell", "lock.shell", "commit_files", "delete", "commit_tests"]
+    # added by MW-073: the shape gate `tests.shape` is the last entry of the shell group
+    # added by MW-107 (R274-D4): the session outside check `outside.shell` stands right after `lock.shell`
+    # added by MW-110 (R281): who-acts gates (lead.shell, message.session) run before the effect gate lock.shell, so a refused command leaves no permit
+    assert names == ["lead.shell", "message.session", "lock.shell", "outside.shell", "commit_files", "delete", "commit_tests", "tests.shape"]
     (entry,) = [e for e in manifest if e["name"] == "commit_tests"]
     assert (entry["gate"], entry["event"], entry["matcher"], entry["onFailure"], entry["function"]) == (
         "commit_tests", "PreToolUse", "Bash|PowerShell", "block", "gate_commit_tests:check")
+    # changed by MW-056 (E15): the gate also warns `commit-tests-still-red` on its allow line; the four older ids stay
+    # changed by MW-072 (E54): the gate also returns the four red proof ids; the five older ids stay
+    # changed by MW-090 (T7 decision: R225): the gate also returns the five case_map ids; the nine older ids stay
     assert set(entry["reason_ids"]) == {"commit-tests-failed", "commit-tests-over-budget", "commit-tests-not-run",
-                                        "commit-tests-chained"}
+                                        "commit-tests-chained", "commit-tests-still-red", "red-not-proven",
+                                        "red-ids-still-red", "red-not-recorded", "test-without-red-proof",
+                                        "case-map-no-decision", "case-map-unknown-left", "case-map-unknown-right",
+                                        "case-map-merge", "case-map-malformed", "shared-record-busy",
+                                        "red-record-partial"}
     assert entry["timeout"] == 900 and entry["on_failure_reason"].strip() and "\n" not in entry["on_failure_reason"]
     stage(proj, "app.py", "def add(a, b):\n    return 0\n")
     set_profile(proj, gates=FILES_OFF)

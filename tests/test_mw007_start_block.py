@@ -35,10 +35,7 @@ def _names(line):
 
 
 def test_the_start_block_names_every_gate_the_profile_turns_off(tmp_path):
-    """E16 (part 4): with the real manifest, a block line `gates off:` names each loaded gate entry that does not
-    run, in manifest order, and `none` when all run; a profile switch turns both entries of a gate off; every loaded
-    entry is in exactly one of the two lists. Catches: a gate that was switched off and that nothing on the start
-    block says, which is how a rule stops holding unseen."""
+    """Catches: a gate that was switched off and that nothing on the start block says, which is how a rule stops holding unseen (E16 part 4)."""
     manifest = dispatch.load_manifest(dispatch.ENGINE_DIR)
     loaded = [e["name"] for e in manifest if e.get("function") and e.get("reason_ids")]
     root = task_root(tmp_path)
@@ -51,15 +48,14 @@ def test_the_start_block_names_every_gate_the_profile_turns_off(tmp_path):
     assert off == ["lock.edit", "owner_ask.edit", "lock.shell", "owner_ask.notify", "owner_ask.remind",
                    "owner_ask.stop"]  # MW-014 (E7, E12)
     on = _names(_line(block, "gates on:"))
-    assert not set(on) & set(off) and sorted(on + off) == sorted(loaded)
+    assert not set(on) & set(off)
+    assert sorted(on + off) == sorted(loaded)
     assert block.splitlines().index(_line(block, "gates off:")) == block.splitlines().index(
         _line(block, "gates on:")) + 1
 
 
 def test_a_gate_without_code_is_not_named_as_off(tmp_path):
-    """E17 (part 4): an entry with no function (planned, off-today) is no gate that runs or is off; it stays in
-    the count «manifest entries without code yet», and an entry with no reason ids stays in «not loaded».
-    Catches: a block that lists thirty names that no switch can change."""
+    """Catches: a block that lists a name that no switch can change, such as an entry with no function (E17 part 4)."""
     manifest = [entry("a", "m:f"), entry("planned", None, reason_ids=[]), entry("n1", "m:f", reason_ids=None)]
     root = task_root(tmp_path)
     block = _block(root, manifest)
@@ -69,9 +65,7 @@ def test_a_gate_without_code_is_not_named_as_off(tmp_path):
 
 
 def test_a_default_off_gate_and_a_nested_mode_are_named_as_off(tmp_path):
-    """E18 (part 4): a gate whose manifest default is off, a gate the profile switches off and a nested mode the
-    profile switches off are each named; a gate the profile turns on stays out of the list.
-    Catches: a list that knows only the profile's own `on: false`."""
+    """Catches: a list that knows only the profile's own `on: false`, so a default-off gate or a nested mode is not named as off (E18 part 4)."""
     manifest = [entry("a", "m:f"), entry("b", "m:f", default_on=False), entry("c", "m:f"),
                 entry("d.mode", "m:f"), entry("e", "m:f", default_on=False)]
     root = task_root(tmp_path)
@@ -82,8 +76,7 @@ def test_a_default_off_gate_and_a_nested_mode_are_named_as_off(tmp_path):
 
 
 def test_an_invalid_profile_names_every_loaded_gate_as_off(tmp_path):
-    """E19 (part 4): while the profile is invalid no gate runs, so the block names each loaded gate as off (and
-    `gates on` is none). Catches: a block that says `gates off: none` while every gate is silent."""
+    """Catches: a block that says `gates off: none` while every gate is silent (E19 part 4)."""
     manifest = [entry("a", "m:f"), entry("b", "m:f")]
     root = task_root(tmp_path)
     block = _block(root, manifest, errors=["state: missing"])
@@ -92,8 +85,7 @@ def test_an_invalid_profile_names_every_loaded_gate_as_off(tmp_path):
 
 
 def test_the_dispatcher_prints_the_off_line_at_session_start(tmp_path):
-    """E16 (part 4): the SessionStart hook's context carries the same `gates off:` line. Catches: a block that is
-    right in `startline.render` but not what the session is shown."""
+    """Catches: a block that is right in `startline.render` but not what the session is shown (E16 part 4)."""
     root = task_root(tmp_path)
     _set_gates(root, {"owner_ask": {"on": False}})
     payload = {"session_id": "s1", "hook_event_name": "SessionStart"}

@@ -33,7 +33,7 @@ tests of the MW-025 gap are found, and a test whose marker is dropped makes it f
 | E5 | a module constant and a helper that read | not read | the tests that use them are flagged | tests/test_mw029_fast_guard.py::test_a_module_constant_and_a_helper_carry_the_read_to_the_test |
 | E6 | copied paths and scratch paths | not read | not flagged | tests/test_mw029_fast_guard.py::test_copied_paths_and_scratch_paths_are_not_flagged |
 | E7 | MW-025's slow test | present | removed; MW-025 row E1 names the guard | tests/test_mw029_fast_guard.py::test_the_whole_suite_in_a_copy_test_is_gone_and_the_row_points_to_the_guard |
-| E8 | register, changelog | no word | register row, a line under `## 0.2.6` | tests/test_mw029_fast_guard.py::test_register_changelog_and_card_name_the_card |
+| E8 | register, changelog | no word | register row, a line under the release that names the card | tests/test_mw029_fast_guard.py::test_register_changelog_and_card_name_the_card |
 
 ## 8. Log
 
@@ -44,3 +44,4 @@ tests of the MW-025 gap are found, and a test whose marker is dropped makes it f
 | 2026-11-11 | first whole run: 840 passed, 3 failed: the guard flagged the generated folder `.pytest_tmp` (a scratch path, now left alone), and the scan hit a line of the red test file (the marker-dropping lines of E3 were rewritten without a regex and without the marker text; no scan exception added; the test's checks are unchanged) | the commit that carries this line | the three tests pass again |
 | 2026-11-11 | ported onto master with MW-026: the changelog line moved from `## 0.2.2` to `## 0.2.6` (one release for both cards), so row E8 and its test read `## 0.2.6` | the commit that carries this line | reading, to confirm |
 | 2026-11-11 | whole suite, `python -m pytest`, term scan included; the guard test E2 measures under 10 s (about 2 s alone) | the commit that carries this line | 843 passed in 417 s (6 min 57 s), well under the 600 s limit (was about 9.5 min); no term-scan exception added |
+| 2026-11-12 | MW-040: row E8 named a release number or an old VERSION | the commit that carries this line | the row says «see VERSION» and «the release that names the card»; its test reads the VERSION file and finds the card's changelog line (`tests/_docs.py`), no release number is pinned |

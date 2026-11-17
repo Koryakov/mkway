@@ -8,24 +8,23 @@ backup. The engine never empties the trash by itself: only the owner's `mkway tr
 """
 from __future__ import annotations
 
-import datetime
 import json
 import os
-import re
 import shutil
 import stat
 import sys
 from pathlib import Path
 
+import core_delete as core
 import helpers
 import locks
 import logs
 import profiles
 
-STAMP = re.compile(r"^(\d{8}T\d{6}-\d{6})(?:-\d+)?$")
+STAMP = core.STAMP
 TRASH = "trash"
 RECORDS = "deletes.jsonl"
-MB = 1024 * 1024
+MB = core.MB
 
 
 class BackupError(Exception):
@@ -49,11 +48,6 @@ def size_of(root, rels) -> int:
     return total
 
 
-def _outermost(rels) -> list:
-    """The targets that lie inside no other target: copying `d` copies `d/b.txt` too."""
-    return [r for r in rels if not any(o != r and r.startswith(o + "/") for o in rels)]
-
-
 def _new_folder(base: Path) -> Path:
     now = logs.now()
     stamp = f"{now:%Y%m%dT%H%M%S}-{now:%f}"
@@ -71,11 +65,8 @@ def _new_folder(base: Path) -> Path:
 def record(root, state, rels, *, session, backup, via, by=None) -> dict:
     """Append the record row; a row that cannot be written is `delete-backup-failed`. `backup` is the backup folder
     or None; `by` (`session` or `owner`) is set by the commands, which know no session id."""
-    row = {"time": logs.now().isoformat(timespec="milliseconds"), "session": session, "via": via,
-           "targets": list(rels),
-           "backup": None if backup is None else Path(os.path.relpath(backup, root)).as_posix()}
-    if by is not None:
-        row["by"] = by
+    row = core.record_row(logs.now().isoformat(timespec="milliseconds"), session, via, rels,
+                          None if backup is None else Path(os.path.relpath(backup, root)).as_posix(), by)
     try:
         logs.append_jsonl(Path(state) / RECORDS, row)
     except OSError as exc:
@@ -98,16 +89,15 @@ def backup(root, state, rels, *, session, max_mb, via="gate", kept=(), order=Non
     except OSError as exc:
         raise BackupError("delete-backup-failed", f"the size of {', '.join(rels)} could not be read ({exc}), so "
                                                   "the delete is refused; nothing was deleted") from None
-    if total > max_mb * MB:
-        raise BackupError("delete-too-large", f"the backup of {', '.join(rels)} is {total / MB:.1f} MB, above "
-                                              f"`delete.max_backup_mb` ({max_mb:g}); this delete needs the owner's "
-                                              "terminal")
+    too_large = core.too_large(total, max_mb, rels)
+    if too_large:
+        raise BackupError(too_large.reason, too_large.message)
     try:
         folder = _new_folder(state / TRASH)
     except OSError as exc:
         raise BackupError("delete-backup-failed", f"the trash folder could not be made ({exc}), so the delete is "
                                                   "refused; nothing was deleted") from None
-    for rel in _outermost(list(rels)):
+    for rel in core.outermost(list(rels)):
         src, dest = root / rel, folder / rel
         try:
             dest.parent.mkdir(parents=True, exist_ok=True)
@@ -149,39 +139,21 @@ def read_list(root, profile, profile_file, text: str):
     no wildcard, and lie in or hold neither a closed lock target nor the engine's state folder. A problem names the
     line number, the line and the reason."""
     root = Path(root)
-    state = helpers.norm(str(profiles.state_dir(root, profile)), root)
     prefix = helpers.top_prefix(root)
-    rels, problems = [], []
-    for number, raw in enumerate(text.splitlines(), 1):
-        line = raw.strip()
-        if not line:
-            continue
-        why = None
-        rel = None if any(ch in line for ch in "*?[") else helpers.norm(line, root, top_prefix=prefix)
-        if any(ch in line for ch in "*?["):
-            why = "is a wildcard: list exact paths"
-        elif rel is None:
-            why = "lies outside the root"
-        elif rel == ".":
-            why = "is the root itself"
-        elif state and (rel == state or state.startswith(rel + "/") or rel.startswith(state + "/")):
-            why = "is or holds the engine's state folder"
-        elif not os.path.lexists(root / rel):
-            why = "does not exist"
-        else:
-            closed = locks.closed_target(root, profile, rel, profile_file)
-            held = None if closed else locks.held_target(root, profile, rel, profile_file)
-            if closed:
-                why = f"is inside the closed lock {closed.name!r}"
-            elif held:
-                why = f"holds {held[1]}, which is inside the closed lock {held[0].name!r}"
-        if why:
-            problems.append(f"line {number}: {line} {why}")
-        elif rel not in rels:
-            rels.append(rel)
-    if not rels and not problems:
-        problems.append("the list holds no path")
-    return rels, problems
+    facts = core.Facts(state=helpers.norm(str(profiles.state_dir(root, profile)), root))
+    while True:
+        try:
+            return core.list_problems(text, facts)
+        except core.Need as need:
+            if need.kind == "lnorm":
+                answer = helpers.norm(need.key, root, top_prefix=prefix)
+            elif need.kind == "lexists":
+                answer = os.path.lexists(root / need.key)
+            else:  # `locks`: the closed lock the path is in, else a path it holds in a closed lock
+                closed = locks.closed_target(root, profile, need.key, profile_file)
+                held = None if closed else locks.held_target(root, profile, need.key, profile_file)
+                answer = (closed.name if closed else None, (held[0].name, held[1]) if held else None)
+            facts.answers[(need.kind, need.key)] = answer
 
 
 def delete_list(root, profile, profile_file, text: str, *, max_mb, by):
@@ -197,7 +169,7 @@ def delete_list(root, profile, profile_file, text: str, *, max_mb, by):
     except BackupError as exc:
         return 1, [exc.message]
     failed = []
-    for rel in _outermost(rels):
+    for rel in core.outermost(rels):
         try:
             remove(root / rel)
         except OSError as exc:
@@ -249,17 +221,12 @@ def empty(root, state, days: float, *, by="owner"):
     """Remove the trash folders older than `days` by the stamp in their name; a folder whose name is no stamp is never
     touched. Returns (names removed, bytes freed); one record row (`via: trash-empty`) when anything was removed."""
     base = Path(state) / TRASH
-    now = logs.now()
     removed, freed = [], 0
-    for name in sorted(os.listdir(base)) if base.is_dir() else []:
-        m = STAMP.match(name)
-        if not m:
-            continue
-        stamp = datetime.datetime.strptime(m.group(1), "%Y%m%dT%H%M%S-%f").replace(tzinfo=datetime.timezone.utc)
-        if now - stamp > datetime.timedelta(days=days):
-            freed += _folder_info(base / name)[1]
-            remove(base / name)
-            removed.append(name)
+    names = sorted(os.listdir(base)) if base.is_dir() else []
+    for name in core.stale_folders(names, logs.now().timestamp(), days):
+        freed += _folder_info(base / name)[1]
+        remove(base / name)
+        removed.append(name)
     if removed:
         record(root, state, removed, session=None, backup=None, via="trash-empty", by=by)
     return removed, freed

@@ -1,0 +1,82 @@
+# case_map of MW-094
+# literal: tests/test_mw076_keys.py::test_a_path_is_a_valid_sessions_file 'C:/mkcl/sessions.json' - S6: an absolute path literal is refused, the value is now built from tmp_path and the schema check reads only that it is a string
+# literal: tests/test_mw007_readme.py::test_the_section_states_the_gates_the_keys_and_their_defaults <asserts> - the three loops became one parametrize over the ordered needle list (S1), each old assert is now one case
+# literal: tests/test_mw011_readme.py::test_the_section_states_who_may_close_the_commands_and_the_default <asserts> - the loop over the needles became one parametrize over the ordered list (S1), each old assert is now one case
+# literal: tests/test_mw019_readme.py::test_the_section_names_every_reason_key_state_and_command <asserts> - the loops became one parametrize over the ordered needle list (S1), each old assert is now one case
+# literal: tests/test_mw011_readme.py::test_the_section_states_who_may_close_the_commands_and_the_default '`Ordered by`' - checked as f"`{needle}`" over the bare NEEDLES tuple, the same text
+# literal: tests/test_mw011_readme.py::test_the_section_states_who_may_close_the_commands_and_the_default '`card resync --add-ordered-by`' - checked as f"`{needle}`" over the bare NEEDLES tuple, the same text
+# literal: tests/test_mw011_readme.py::test_the_section_states_who_may_close_the_commands_and_the_default '`card set <id> closed`' - checked as f"`{needle}`" over the bare NEEDLES tuple, the same text
+# literal: tests/test_mw011_readme.py::test_the_section_states_who_may_close_the_commands_and_the_default '`cards.approver`' - checked as f"`{needle}`" over the bare NEEDLES tuple, the same text
+# literal: tests/test_mw011_readme.py::test_the_section_states_who_may_close_the_commands_and_the_default '`give-ambiguous`' - checked as f"`{needle}`" over the bare NEEDLES tuple, the same text
+# literal: tests/test_mw011_readme.py::test_the_section_states_who_may_close_the_commands_and_the_default '`mkway give <card> <who>`' - checked as f"`{needle}`" over the bare NEEDLES tuple, the same text
+# literal: tests/test_mw011_readme.py::test_the_section_states_who_may_close_the_commands_and_the_default '`mkway sessions`' - checked as f"`{needle}`" over the bare NEEDLES tuple, the same text
+# literal: tests/test_mw011_readme.py::test_the_section_states_who_may_close_the_commands_and_the_default '`open`' - checked as f"`{needle}`" over the bare NEEDLES tuple, the same text
+# literal: tests/test_mw011_readme.py::test_the_section_states_who_may_close_the_commands_and_the_default '`orderer`' - checked as f"`{needle}`" over the bare NEEDLES tuple, the same text
+# literal: tests/test_mw011_readme.py::test_the_section_states_who_may_close_the_commands_and_the_default '`owner-only`' - checked as f"`{needle}`" over the bare NEEDLES tuple, the same text
+# literal: tests/test_mw011_readme.py::test_the_section_states_who_may_close_the_commands_and_the_default '`owner`' - checked as f"`{needle}`" over the bare NEEDLES tuple, the same text
+# literal: tests/test_mw011_readme.py::test_the_section_states_who_may_close_the_commands_and_the_default '`waiting`' - checked as f"`{needle}`" over the bare NEEDLES tuple, the same text
+# literal: tests/test_mw019_readme.py::test_the_section_names_every_reason_key_state_and_command "`sha256: <the document's sha256>`" - checked as f"`{needle}`" over the bare OUTBOX_NEEDLES tuple, the same text
+# literal: tests/test_mw019_readme.py::test_the_section_names_every_reason_key_state_and_command '`' - checked as f"`{needle}`" over the bare OUTBOX_NEEDLES tuple, the same text
+# literal: tests/test_mw019_readme.py::test_the_section_names_every_reason_key_state_and_command '`.check.md`' - checked as f"`{needle}`" over the bare OUTBOX_NEEDLES tuple, the same text
+# literal: tests/test_mw019_readme.py::test_the_section_names_every_reason_key_state_and_command '`agents.jsonl`' - checked as f"`{needle}`" over the bare OUTBOX_NEEDLES tuple, the same text
+# literal: tests/test_mw019_readme.py::test_the_section_names_every_reason_key_state_and_command '`card close`' - checked as f"`{needle}`" over the bare OUTBOX_NEEDLES tuple, the same text
+# literal: tests/test_mw019_readme.py::test_the_section_names_every_reason_key_state_and_command '`checker: <agent type>`' - checked as f"`{needle}`" over the bare OUTBOX_NEEDLES tuple, the same text
+# literal: tests/test_mw019_readme.py::test_the_section_names_every_reason_key_state_and_command '`claims: N checked, 0 overstated, 0 without basis`' - checked as f"`{needle}`" over the bare OUTBOX_NEEDLES tuple, the same text
+# literal: tests/test_mw019_readme.py::test_the_section_names_every_reason_key_state_and_command '`links: clean`' - checked as f"`{needle}`" over the bare OUTBOX_NEEDLES tuple, the same text
+# literal: tests/test_mw019_readme.py::test_the_section_names_every_reason_key_state_and_command '`missing`' - checked as f"`{needle}`" over the bare OUTBOX_NEEDLES tuple, the same text
+# literal: tests/test_mw019_readme.py::test_the_section_names_every_reason_key_state_and_command '`mkway outbox`' - checked as f"`{needle}`" over the bare OUTBOX_NEEDLES tuple, the same text
+# literal: tests/test_mw019_readme.py::test_the_section_names_every_reason_key_state_and_command '`numbers: N checked, 0 contradictions`' - checked as f"`{needle}`" over the bare OUTBOX_NEEDLES tuple, the same text
+# literal: tests/test_mw019_readme.py::test_the_section_names_every_reason_key_state_and_command '`outbox: N files, M unchecked`' - checked as f"`{needle}`" over the bare OUTBOX_NEEDLES tuple, the same text
+# literal: tests/test_mw019_readme.py::test_the_section_names_every_reason_key_state_and_command '`outbox_checks.jsonl`' - checked as f"`{needle}`" over the bare OUTBOX_NEEDLES tuple, the same text
+# literal: tests/test_mw019_readme.py::test_the_section_names_every_reason_key_state_and_command '`patterns: clean`' - checked as f"`{needle}`" over the bare OUTBOX_NEEDLES tuple, the same text
+# literal: tests/test_mw019_readme.py::test_the_section_names_every_reason_key_state_and_command '`stale`' - checked as f"`{needle}`" over the bare OUTBOX_NEEDLES tuple, the same text
+# literal: tests/test_mw019_readme.py::test_the_section_names_every_reason_key_state_and_command '`unproven`' - checked as f"`{needle}`" over the bare OUTBOX_NEEDLES tuple, the same text
+# literal: tests/test_mw019_readme.py::test_the_section_names_every_reason_key_state_and_command '`valid`' - checked as f"`{needle}`" over the bare OUTBOX_NEEDLES tuple, the same text
+# literal: tests/test_mw019_readme.py::test_the_section_names_every_reason_key_state_and_command '`verdict-not-enforced`' - checked as f"`{needle}`" over the bare OUTBOX_NEEDLES tuple, the same text
+# literal: tests/test_mw017_docs.py::<module> ' ' - the unused helper _section and its README constant were removed; no test called them
+# literal: tests/test_mw017_docs.py::<module> 'README.md' - the unused helper _section and its README constant were removed; no test called them
+# literal: tests/test_mw017_docs.py::<module> '\n' - the unused helper _section and its README constant were removed; no test called them
+# literal: tests/test_mw017_docs.py::<module> '^## ' - the unused helper _section and its README constant were removed; no test called them
+# literal: tests/test_mw017_docs.py::<module> 'utf-8' - the unused helper _section and its README constant were removed; no test called them
+# literal: tests/test_mw007_owner_ask.py::test_owner_ask_keys_are_in_the_schema '/abs' - S6: an absolute path literal; the absolute case is now test_owner_ask_dir_that_is_absolute_is_refused_by_the_schema, parametrized over ABSOLUTE_FORMS: the drive form str(tmp_path) and the leading-slash form "/" plus tmp_path relative to its anchor, both built from tmp_path (the two branches of schema_check relative-path)
+# literal: tests/test_mw007_owner_ask.py::test_owner_ask_defaults_and_overrides '/abs' - S6: an absolute path literal; the absolute case is now test_owner_ask_dir_that_is_absolute_reads_as_the_default, parametrized over ABSOLUTE_FORMS: the drive form str(tmp_path) and the leading-slash form "/" plus tmp_path relative to its anchor, both built from tmp_path
+# literal: tests/test_mw003_start_keys.py::test_profile_keys_of_mw003 '/abs' - S6: an absolute test_roots literal; the absolute case is now test_profile_keys_of_mw003_absolute_test_root, parametrized over ABSOLUTE_FORMS: the drive form str(tmp_path) and the leading-slash form "/" plus tmp_path relative to its anchor, both built from tmp_path
+# literal: tests/test_mw003_start_keys.py::test_profile_keys_of_mw003 'test_roots' - the key of the ("test_roots", ["/abs"]) case; that case is now test_profile_keys_of_mw003_absolute_test_root, where the key is a keyword argument, not a string
+# literal: tests/test_mw004_agents.py::test_a_failed_record_never_blocks_and_adds_no_context 'agent-record-failed' - the two-row expected list became one parametrize case per event (start, stop); each old row is one case
+# literal: tests/test_mw004_agents.py::test_a_failed_record_never_blocks_and_adds_no_context 'warn' - the two-row expected list became one parametrize case per event (start, stop); each old row is one case
+# literal: tests/test_mw007_owner_ask.py::test_owner_ask_keys_are_in_the_schema '' - moved into BAD_OWNER_ASKS, the same file's module pool, one parametrize case per bad value
+# literal: tests/test_mw007_owner_ask.py::test_owner_ask_keys_are_in_the_schema 'dir' - moved into BAD_OWNER_ASKS, the same file's module pool, one parametrize case per bad value
+# literal: tests/test_mw007_owner_ask.py::test_owner_ask_keys_are_in_the_schema 'markers' - moved into BAD_OWNER_ASKS, the same file's module pool, one parametrize case per bad value
+# literal: tests/test_mw007_owner_ask.py::test_owner_ask_keys_are_in_the_schema 'sources' - moved into BAD_OWNER_ASKS, the same file's module pool, one parametrize case per bad value
+# literal: tests/test_mw007_owner_ask.py::test_owner_ask_keys_are_lines_of_keys_md_with_their_defaults 3 - the loop over the three keys became one parametrize over DEFAULT_TEXTS; the row index 3 is written once in the body, each old case is one parametrize case
+# literal: tests/test_mw007_owner_ask.py::test_owner_ask_keys_are_lines_of_keys_md_with_their_defaults 'owner_ask.dir' - the key is now a parametrize value in DEFAULT_TEXTS, one case per key
+# literal: tests/test_mw007_owner_ask.py::test_owner_ask_keys_are_lines_of_keys_md_with_their_defaults 'owner_ask.markers' - the key is now a parametrize value in DEFAULT_TEXTS, one case per key
+# literal: tests/test_mw007_owner_ask.py::test_owner_ask_keys_are_lines_of_keys_md_with_their_defaults 'owner_ask.sources' - the key is now a parametrize value in DEFAULT_TEXTS, one case per key
+# literal: tests/test_mw003_start_keys.py::test_plan_defects_d2_and_d8 <asserts> - the loop assert of the key list moved into the same file's helper _assert_later, which still runs once per key; the test body keeps its other asserts
+# literal: tests/test_mw003_start_keys.py::test_start_line_lists_status_changes_with_their_record 0 - the zero exit code checks of the helper _new_cards, called from this test; the values are unchanged, the tool counts the helper once for the file
+# literal: tests/test_mw003_start_keys.py::test_start_line_lists_status_changes_with_their_record 2 - the old range(2) of the test is now two written calls of the helper _new_cards with titles One and Two
+# literal: tests/test_mw003_start_keys.py::test_start_line_lists_status_changes_with_their_record 'card changes since' - the line prefix is checked inside the helper _changes, called from this test
+# literal: tests/test_mw003_start_keys.py::test_start_line_lists_status_changes_with_their_record 'card' - the card titles and command words are passed to the helper _new_cards, called from this test
+# literal: tests/test_mw003_start_keys.py::test_start_line_lists_status_changes_with_their_record 'new' - the card command word is passed to the helper _new_cards, called from this test
+# literal: tests/shell/test_verdicts_facts.py::test_the_authors_of_a_file_are_read_from_real_git 'tests/test_a.py' - rename of synthetic file names test_a.py, test_b.py, test_new.py to case_a.py, case_b.py, case_new.py (S5 literal rule of core_shape, TEST_FILE_LITERAL); same checks: every expected side moved with its input, and the verdicts code has no test_ name filter (reviewer, f5b4406)
+# literal: tests/shell/test_verdicts_facts.py::test_an_untracked_file_and_a_folder_with_no_git_have_no_author 'tests/test_new.py' - rename of synthetic file names test_a.py, test_b.py, test_new.py to case_a.py, case_b.py, case_new.py (S5 literal rule of core_shape, TEST_FILE_LITERAL); same checks (reviewer, f5b4406)
+# literal: tests/shell/test_verdicts_facts.py::test_the_verdict_file_rows_are_read 'tests/test_b.py::test_two' - rename of synthetic file names test_a.py, test_b.py, test_new.py to case_a.py, case_b.py, case_new.py (S5 literal rule of core_shape, TEST_FILE_LITERAL); same checks (reviewer, f5b4406)
+# literal: tests/shell/test_verdicts_facts.py::test_the_facts_hold_the_nodes_the_rows_and_the_authors 'tests/test_a.py' - rename of synthetic file names test_a.py, test_b.py, test_new.py to case_a.py, case_b.py, case_new.py (S5 literal rule of core_shape, TEST_FILE_LITERAL); same checks (reviewer, f5b4406)
+# literal: tests/test_schema.py::test_broken_profile_fails_naming_key <computed-param> - seven cases written in the test
+# literal: tests/shell/test_verdicts_facts.py::test_the_authors_of_a_file_are_read_from_real_git 'tests/test_a.py' - renamed for S5; the S5 card restores it (R235)
+# literal: tests/shell/test_verdicts_facts.py::test_the_authors_of_a_file_are_read_from_real_git 'tests/test_b.py' - renamed for S5; the S5 card restores it (R235)
+# literal: tests/shell/test_verdicts_facts.py::test_an_untracked_file_and_a_folder_with_no_git_have_no_author 'tests/test_new.py' - renamed for S5; the S5 card restores it (R235)
+# literal: tests/shell/test_verdicts_facts.py::test_an_untracked_file_and_a_folder_with_no_git_have_no_author 'tests/test_a.py' - renamed for S5; the S5 card restores it (R235)
+# literal: tests/shell/test_verdicts_facts.py::test_the_verdict_file_rows_are_read 'tests/test_b.py::test_two' - renamed for S5; the S5 card restores it (R235)
+# literal: tests/shell/test_verdicts_facts.py::test_the_facts_hold_the_nodes_the_rows_and_the_authors 'tests/test_a.py' - renamed for S5; the S5 card restores it (R235)
+# literal: tests/shell/test_verdicts_facts.py::test_the_verdict_file_rows_are_read 'tests/test_a.py::test_one' - renamed for S5 (module constant NODE); the S5 card restores it (R235)
+# literal: tests/shell/test_verdicts_facts.py::test_the_facts_hold_the_nodes_the_rows_and_the_authors 'tests/test_a.py::test_one' - renamed for S5 (module constant NODE); the S5 card restores it (R235)
+# literal: tests/shell/test_verdicts_facts.py::<module> 'tests/test_a.py::test_one' - renamed for S5 (module constant NODE); the S5 card restores it (R235)
+# literal: tests/shell/test_verdicts_facts.py::test_an_untracked_file_and_a_folder_with_no_git_have_no_author 'test_a.py' - renamed for S5; the S5 card restores it (R235)
+# literal: tests/shell/test_verdicts_facts.py::test_an_untracked_file_and_a_folder_with_no_git_have_no_author 'test_new.py' - renamed for S5; the S5 card restores it (R235)
+# literal: tests/shell/test_verdicts_facts.py::test_the_authors_of_a_file_are_read_from_real_git 'test_a.py' - renamed for S5; the S5 card restores it (R235)
+# literal: tests/shell/test_verdicts_facts.py::test_the_authors_of_a_file_are_read_from_real_git 'test_b.py' - renamed for S5; the S5 card restores it (R235)
+# literal: tests/shell/test_verdicts_facts.py::test_the_facts_hold_the_nodes_the_rows_and_the_authors 'test_a.py' - renamed for S5; the S5 card restores it (R235)
+# literal: tests/shell/test_verdicts_facts.py::test_the_verdict_file_rows_are_read '| tests/test_b.py::test_two | Weak | no Catches line | session:reader-1 |\n' - renamed for S5; the S5 card restores it (R235)
+# literal: tests/test_mw007_readme.py::test_the_section_states_the_gates_the_keys_and_their_defaults '`' - the f-string piece of the removed _needles; the texts are now written whole in NEEDLES
+# literal: tests/test_mw007_readme.py::test_the_section_states_the_gates_the_keys_and_their_defaults '`owner_ask.' - the f-string piece of the removed _needles; the texts are now written whole in NEEDLES

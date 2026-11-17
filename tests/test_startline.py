@@ -47,10 +47,10 @@ def _render(root, env=None, profile=None, errors=()):
 
 
 def test_start_line_block(task):
-    """E34: one block: the version and the profile path; the gates on and the gates not loaded; the vcs line; the
-    drift result; the count of files in locks/; the gate-error and dispatcher-error counts."""
+    """Catches: a start line missing one of its parts: the version and profile path, the gates on and not loaded, the vcs line, the drift result, the locks count, or the error counts (E34)."""
     block = _render(task)
-    assert "mkway v9.9.9 (v9)" in block and "profile: mkway/profile.json" in block
+    assert "mkway v9.9.9 (v9)" in block
+    assert "profile: mkway/profile.json" in block
     assert "gates on: fixture_refuse" in block
     assert "not loaded: n1 (no reason_ids)" in block
     assert "vcs: none, every git step is off" in block
@@ -64,9 +64,7 @@ def _drift_lines(block):
 
 
 def test_drift_three_comparisons_one_warning(task):
-    """E35: the drift check compares (1) the copy's hash with the lock, (2) the live owned entries with a fresh
-    generation as whole entries (event, matcher, command, timeout), (3) the profile with the schema. Any
-    difference gives one warning line that names the fix, `mkway install`."""
+    """Catches: a drift check that misses one of its three comparisons (the copy's hash, the owned entries as whole entries, the profile with the schema), or gives other than one warning line that names `mkway install` (E35)."""
     profile = json.loads((task / "mkway" / "profile.json").read_text("utf-8"))
     assert startline.drift(task, profile, [], MANIFEST) == []
     a = task / "mkway" / "engine" / "engine" / "a.py"
@@ -86,12 +84,13 @@ def test_drift_three_comparisons_one_warning(task):
     items = startline.drift(task, profile, errors, MANIFEST)
     assert [i.split(":")[0] for i in items] == ["hook entries", "profile"]
     lines = _drift_lines(_render(task, errors=errors))
-    assert len(lines) == 1 and "mkway install" in lines[0] and "bundle.root" in lines[0]
+    assert len(lines) == 1
+    assert "mkway install" in lines[0]
+    assert "bundle.root" in lines[0]
 
 
 def test_user_layer_information_only(task, tmp_path):
-    """E36: the user layer is listed for information only; a missing or unreadable file is said so, and nothing
-    fails."""
+    """Catches: a user layer that fails the start line when its file is missing or unreadable, or that is not listed as information only (E36)."""
     home = tmp_path / "home"
     (home / ".claude").mkdir(parents=True)
     env = {"HOME": str(home), "USERPROFILE": str(home)}
@@ -106,8 +105,7 @@ def test_user_layer_information_only(task, tmp_path):
 
 
 def test_start_line_names_invalid_profile(task):
-    """E38 (C17 b): at SessionStart the start line reaches the model as additionalContext and names a broken
-    profile's keys (`profile-invalid`), before the first tool call."""
+    """Catches: a broken profile that the start line does not name at SessionStart, as additionalContext before the first tool call (E38, C17 b)."""
     broken = make_profile()
     broken["bundle"]["root"] = "../outside"
     write_profile(task, broken)
@@ -115,14 +113,13 @@ def test_start_line_names_invalid_profile(task):
                        env={"CLAUDE_PROJECT_DIR": str(task)}, manifest=MANIFEST, gate_paths=[FIXTURES])
     assert res.exit_code == 0
     context = json.loads(res.stdout)["hookSpecificOutput"]["additionalContext"]
-    assert "profile-invalid" in context and "bundle.root" in context
+    assert "profile-invalid" in context
+    assert "bundle.root" in context
     assert "mkway" in context.splitlines()[0]
 
 
 def test_drift_compares_whole_commands(task):
-    """E46 (content check F1): drift compares whole commands. An owned entry rewritten as `exit 0 || <command>`
-    (the hook never runs) is drift. The per-machine interpreter is read from <state.dir>/machine.json, so an entry
-    made with `--python` is no drift once that file says so."""
+    """Catches: drift that compares only part of an owned entry, misses an entry rewritten as `exit 0 || <command>`, or reads the interpreter from anywhere but machine.json (E46, content check F1)."""
     profile = json.loads((task / "mkway" / "profile.json").read_text("utf-8"))
     settings = task / ".claude" / "settings.json"
     data = json.loads(settings.read_text("utf-8"))
@@ -141,13 +138,7 @@ def test_drift_compares_whole_commands(task):
 
 
 def test_drift_machine_checks_the_interpreter(task, tmp_path):
-    """E66 (fix check 2 M2, retro-chief10): at start, <state.dir>/machine.json must name an existing executable that
-    reports Python 3.9 or later, and must equal the interpreter inside the owned entries. Any difference is a
-    `drift-machine` item, and the drift line names `mkway install`. (Changed by blind rounds 3-4 and 5.)
-    Catches: a comparison with the first owned entry only; a reader that catches only `JSONDecodeError` (a folder
-    or bytes that are not UTF-8 raise, and the start line is lost); a reader that falls back to the profile on an
-    empty, blank or non-text value; a start-time rule looser than install's (the `py` argument forms, a flag after
-    a program that is not `py`, a missing path); a version compare that refuses the (3, 9) boundary."""
+    """Catches: a comparison with the first owned entry only; a reader that catches only `JSONDecodeError`, so a folder or non-UTF-8 bytes lose the start line; a reader that falls back to the profile on an empty, blank or non-text value; a start-time rule looser than install's; a version compare that refuses the (3, 9) boundary (E66, fix check 2 M2, retro-chief10)."""
     profile = json.loads((task / "mkway" / "profile.json").read_text("utf-8"))
     settings = task / ".claude" / "settings.json"
     machine = task / "mkway" / "state" / "machine.json"
@@ -169,13 +160,19 @@ def test_drift_machine_checks_the_interpreter(task, tmp_path):
     settings.write_text(json.dumps(data), encoding="utf-8")
     assert machine_items(), "one non-first entry differs"
     put(quoted, quoted)
-    for bad in ("{broken", "{}", json.dumps({"python": ""}), json.dumps({"python": "   "})):
-        machine.write_text(bad, encoding="utf-8")
-        assert machine_items(), bad
+    machine.write_text("{broken", encoding="utf-8")
+    assert machine_items(), "{broken"
+    machine.write_text("{}", encoding="utf-8")
+    assert machine_items(), "{}"
+    machine.write_text(json.dumps({"python": ""}), encoding="utf-8")
+    assert machine_items(), "empty python"
+    machine.write_text(json.dumps({"python": "   "}), encoding="utf-8")
+    assert machine_items(), "blank python"
     missing = '"' + str(tmp_path / "none" / "python.exe") + '"'
-    for value in (missing, quoted + " -3"):
-        put(value, value)
-        assert machine_items(), value
+    put(missing, missing)
+    assert machine_items(), missing
+    put(quoted + " -3", quoted + " -3")
+    assert machine_items(), quoted + " -3"
     ok39 = '"' + str(fake_program(tmp_path / "bin", "py39", prints="(3, 9)")) + '"'
     put(ok39, ok39)
     assert not machine_items()
@@ -197,30 +194,25 @@ def test_drift_machine_checks_the_interpreter(task, tmp_path):
     machine.mkdir()
     assert machine_items(), "a folder"
     (line,) = _drift_lines(_render(task))
-    assert "drift-machine" in line and line.endswith("Fix: mkway install")
+    assert "drift-machine" in line
+    assert line.endswith("Fix: mkway install")
     machine.rmdir()
-    for value in ("py -c 1", "py -3 -3"):
-        put(value, value)
-        assert machine_items(), value
+    put("py -c 1", "py -c 1")
+    assert machine_items(), "py -c 1"
+    put("py -3 -3", "py -3 -3")
+    assert machine_items(), "py -3 -3"
     put(quoted, quoted)
     machine.write_text(json.dumps({"python": 5}), encoding="utf-8")
     assert machine_items(), "a value that is not text"
     machine.unlink()
     assert machine_items()
     (line,) = _drift_lines(_render(task))
-    assert "drift-machine" in line and line.endswith("Fix: mkway install")
+    assert "drift-machine" in line
+    assert line.endswith("Fix: mkway install")
 
 
 def test_start_probe_runs_last_and_has_its_own_timeout(task, tmp_path, monkeypatch):
-    """E71 (fix check 3 L5; changed by fix check 4 F6, F7 and blind round 5): the start line compares machine.json
-    with the entries first, so a program named only in machine.json is never run, also when there is no owned entry
-    at all; the interpreter check has its own timeout (`MACHINE_CHECK_SECONDS`, 5 s), shorter than the start entry's,
-    and on timeout gives a visible `drift-machine: interpreter check timed out` item. The start line is never lost.
-    The test sets the timeout to 1 s, so the suite does not wait 5 s twice (F7).
-    Catches: a probe that runs before the comparison (the toucher runs); a comparison over an empty entry list that
-    lets the probe run (`any([])` is False, F6); a probe that ignores `MACHINE_CHECK_SECONDS` (a hard-coded timeout
-    takes longer than the time limit); a probe timeout not shorter than the start entry's; a timeout that gives no
-    item or loses the drift line."""
+    """Catches: a probe that runs before the comparison, or over an empty entry list, or ignores `MACHINE_CHECK_SECONDS`, or has a timeout not shorter than the start entry's, or a timeout that gives no item or loses the drift line (E71, fix check 3 L5, fix check 4 F6 and F7, blind round 5)."""
     profile = json.loads((task / "mkway" / "profile.json").read_text("utf-8"))
     settings = task / ".claude" / "settings.json"
     machine = task / "mkway" / "state" / "machine.json"
@@ -249,16 +241,19 @@ def test_start_probe_runs_last_and_has_its_own_timeout(task, tmp_path, monkeypat
     assert time.monotonic() - started < 4  # the constant is really used
     assert "drift-machine: interpreter check timed out" in items
     (line,) = _drift_lines(_render(task))
-    assert "interpreter check timed out" in line and line.endswith("Fix: mkway install")
+    assert "interpreter check timed out" in line
+    assert line.endswith("Fix: mkway install")
+
+
+def _wait_for(path, seconds):
+    """Polls for `path` for up to `seconds`; returns as soon as it exists."""
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline and not path.exists():
+        time.sleep(0.1)
 
 
 def test_probe_stops_an_orphaned_child(tmp_path):
-    """E73 (fix check 4 F5): when the interpreter probe times out, every process it started is stopped, a grandchild
-    whose parent already exited included, and the stop is quick: the probe's timeout plus a few seconds, so the worst
-    case (5 s probe, 4 s kill, 2 s drain) stays under the start entry's 15 s.
-    Catches: a stop that reaches only the direct child (`taskkill /T` or `proc.kill()` on a parent that already
-    exited leaves the orphan running, and it writes its file); a stop that waits on a pipe the orphan still holds
-    (the time limit fails)."""
+    """Catches: a stop that reaches only the direct child, so an orphan survives and writes its file, or a stop that waits on a pipe the orphan still holds, so the time limit fails (E73, fix check 4 F5)."""
     survived = tmp_path / "survived.txt"
     script = tmp_path / "orphan.py"
     script.write_text(f"import time\ntime.sleep(3)\nopen({str(survived)!r}, 'w').close()\n", encoding="utf-8")
@@ -266,13 +261,12 @@ def test_probe_stops_an_orphaned_child(tmp_path):
     started = time.monotonic()
     assert install.interpreter_problem(spawner, timeout=1) == "timeout"
     assert time.monotonic() - started < 4
-    time.sleep(3.5)
+    _wait_for(survived, 3.5)
     assert not survived.exists(), "the orphaned grandchild survived the probe's stop"
 
 
 def test_drift_compares_on_failure(task):
-    """E56 (R13c point 1): `onFailure` is part of the whole entry: an `edit` entry without its `"onFailure":
-    "block"` is drift."""
+    """Catches: an `edit` entry without its `"onFailure": "block"` that is not drift, since `onFailure` is part of the whole entry (E56, R13c point 1)."""
     profile = json.loads((task / "mkway" / "profile.json").read_text("utf-8"))
     settings = task / ".claude" / "settings.json"
     data = json.loads(settings.read_text("utf-8"))

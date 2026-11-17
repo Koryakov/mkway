@@ -3,40 +3,75 @@ README section. Synthetic task roots only; no task data."""
 import copy
 import json
 
+import pytest
+
 from _engine import FIXTURES, REPO, make_profile
 from _keys_md import section_rows, unquote
 import profiles
 import schema_check
 
 NOW = "in schema now"
+BAD_OWNER_ASKS = (
+    pytest.param({"dir": ""}, id="dir-empty"),
+    pytest.param({"dir": "../up"}, id="dir-up"),
+    pytest.param({"dir": 5}, id="dir-number"),
+    pytest.param({"markers": []}, id="markers-empty-list"),
+    pytest.param({"markers": [""]}, id="markers-empty-item"),
+    pytest.param({"markers": "Request:"}, id="markers-string"),
+    pytest.param({"sources": []}, id="sources-empty-list"),
+    pytest.param({"sources": [""]}, id="sources-empty-item"),
+    pytest.param({"sources": ["two words"]}, id="sources-with-space"),
+    pytest.param({"sources": ["colon:"]}, id="sources-with-colon"),
+    pytest.param({"nope": 1}, id="unknown-key"),
+)
+BAD_SETTINGS = (
+    pytest.param({"dir": 5, "markers": "Request:", "sources": 1}, id="dir-number-markers-string-sources-number"),
+    pytest.param({"markers": ["", 3]}, id="markers-empty-and-number"),
+    pytest.param("text", id="text"),
+    pytest.param([], id="list"),
+)
+DEFAULT_TEXTS = (
+    pytest.param("owner_ask.dir", "`<bundle.root>/asks`", id="dir-default"),
+    pytest.param("owner_ask.markers", "`Request:`", id="markers-default"),
+    pytest.param("owner_ask.sources", "`ledger`", id="sources-default"),  # changed by MW-008 (E17): the default is the ledger
+)
 
 
 def _good():
     return json.loads((FIXTURES / "profile_depth2.json").read_text(encoding="utf-8"))
 
 
-def test_owner_ask_keys_are_in_the_schema():
-    """E1 (part 3): the schema takes `owner_ask.dir` (a repo-relative path), `owner_ask.markers` and
-    `owner_ask.sources` (non-empty lists of non-empty strings; a source name holds no space and no colon, because it
-    is written before a colon in a quote line); an unknown key under `owner_ask` is profile-invalid.
-    Catches: a key the gates read that the schema refuses, or a value that breaks the line shapes."""
+@pytest.mark.parametrize("bad", BAD_OWNER_ASKS)
+def test_owner_ask_keys_are_in_the_schema(bad):
+    """Catches: a key the gates read that the schema refuses, or a value that breaks the line shapes (E1 part 3)."""
     good = _good()
     full = dict(good, owner_ask={"dir": "notes/asks", "markers": ["Request:", "Ask:"],
                                  "sources": ["review", "canon"]})
     assert schema_check.check(full) == []
     assert schema_check.check(dict(good, owner_ask={})) == []
-    for bad in ({"dir": "/abs"}, {"dir": ""}, {"dir": "../up"}, {"dir": 5}, {"markers": []}, {"markers": [""]},
-                {"markers": "Request:"}, {"sources": []}, {"sources": [""]}, {"sources": ["two words"]},
-                {"sources": ["colon:"]}, {"nope": 1}):
-        errors = schema_check.check(dict(good, owner_ask=copy.deepcopy(bad)))
-        assert errors and all(e.startswith("owner_ask") for e in errors), (bad, errors)
+    errors = schema_check.check(dict(good, owner_ask=copy.deepcopy(bad)))
+    assert errors
+    assert all(e.startswith("owner_ask") for e in errors), (bad, errors)
 
 
-def test_owner_ask_defaults_and_overrides():
-    """E2 (part 3): with no `owner_ask` in the profile the settings are the defaults: the folder `asks` inside the
-    bundle, the marker `Request:`, the source `review`; the profile's own values replace them; a value that is not
-    usable falls back to the default, as `state.dir` does, so a gate never crashes on a bad key.
-    Catches: a default that is hard-coded in a gate, or an override that is ignored."""
+# the two absolute forms schema_check refuses (engine/schema_check.py: a drive form and a leading-slash form), both from tmp_path
+ABSOLUTE_FORMS = [
+    pytest.param(lambda p: str(p), id="drive-form"),
+    pytest.param(lambda p: "/" + p.relative_to(p.anchor).as_posix(), id="leading-slash-form"),
+]
+
+
+@pytest.mark.parametrize("make", ABSOLUTE_FORMS)
+def test_owner_ask_dir_that_is_absolute_is_refused_by_the_schema(tmp_path, make):
+    """Catches: an absolute owner_ask.dir that the schema lets through."""
+    errors = schema_check.check(dict(_good(), owner_ask={"dir": make(tmp_path)}))
+    assert errors
+    assert all(e.startswith("owner_ask") for e in errors), errors
+
+
+@pytest.mark.parametrize("bad", BAD_SETTINGS)
+def test_owner_ask_defaults_and_overrides(bad):
+    """Checks: the defaults a gate uses, and that an override replaces each of them (E2 part 3)."""
     default = {"dir": "mkway/asks", "markers": ["Request:"], "sources": ["ledger"],  # changed by MW-008 (E17)
                "max_open": 1, "tool_allowed": False}  # changed by MW-014 (E19)
     assert profiles.owner_ask(make_profile()) == default
@@ -50,20 +85,21 @@ def test_owner_ask_defaults_and_overrides():
     only_dir = make_profile(owner_ask={"dir": "x/y"})
     assert profiles.owner_ask(only_dir) == {"dir": "x/y", "markers": ["Request:"], "sources": ["ledger"],  # MW-008
                                             "max_open": 1, "tool_allowed": False}  # MW-014
-    for bad in ({"dir": "/abs", "markers": [], "sources": [""]}, {"dir": 5, "markers": "Request:", "sources": 1},
-                {"markers": ["", 3]}, "text", []):
-        assert profiles.owner_ask(make_profile(owner_ask=bad)) == default, bad
+    assert profiles.owner_ask(make_profile(owner_ask=bad)) == default, bad
     assert profiles.validate(own) == []  # the profile above, with its own `owner_ask` values
 
 
-def test_owner_ask_keys_are_lines_of_keys_md_with_their_defaults():
-    """E3 (part 3): each key is a line of the «Added keys» table of KEYS.md, «in schema now» with its own schema path
-    and its default named. Catches: a key with no default written down, which would make the default a hard-coded
-    value that nobody can find."""
+@pytest.mark.parametrize("make", ABSOLUTE_FORMS)
+def test_owner_ask_dir_that_is_absolute_reads_as_the_default(tmp_path, make):
+    """Checks: an absolute owner_ask.dir reads as the default folder, so a gate never uses it."""
+    default = {"dir": "mkway/asks", "markers": ["Request:"], "sources": ["ledger"], "max_open": 1, "tool_allowed": False}
+    assert profiles.owner_ask(make_profile(owner_ask={"dir": make(tmp_path), "markers": [], "sources": [""]})) == default
+
+
+@pytest.mark.parametrize("key, default_text", DEFAULT_TEXTS)
+def test_owner_ask_keys_are_lines_of_keys_md_with_their_defaults(key, default_text):
+    """Checks: each key has its line in KEYS.md with its default written down (E3 part 3)."""
     rows = {unquote(r[0]): r for r in section_rows("Added keys")}
-    for key in ("owner_ask.dir", "owner_ask.markers", "owner_ask.sources"):
-        assert rows[key][1:3] == [NOW, f"`{key}`"], key
-    assert "`<bundle.root>/asks`" in rows["owner_ask.dir"][3]
-    assert "`Request:`" in rows["owner_ask.markers"][3]
-    assert "`ledger`" in rows["owner_ask.sources"][3]  # changed by MW-008 (E17): the default is the ledger
+    assert rows[key][1:3] == [NOW, f"`{key}`"], key
+    assert default_text in rows[key][3], key
     assert (REPO / "engine" / "KEYS.md").is_file()

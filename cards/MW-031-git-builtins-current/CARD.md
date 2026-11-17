@@ -35,7 +35,7 @@ machine `check` prints no warning.
 | E4 | the profile key | none | extends the list for the check and the git form reader; an unusable value is no key | tests/test_mw031_git_builtins.py::test_the_profile_key_extends_the_list_for_the_check_and_the_gate |
 | E5 | the schema | no `lock_gate` group | `lock_gate.git_builtins_extra` is an array of names | tests/test_mw031_git_builtins.py::test_the_schema_accepts_the_key_and_refuses_a_wrong_type |
 | E6 | KEYS.md | engine row says «unverified»; no profile key row | added-keys row; engine row names MW-031 | tests/test_mw031_git_builtins.py::test_keys_md_names_the_key_and_the_direction |
-| E7 | register, changelog | no word | register row, a line under `## 0.2.6`, VERSION 0.2.7 (MW-027 bumps it; it was 0.2.6) | tests/test_mw031_git_builtins.py::test_register_changelog_and_card_name_the_card |
+| E7 | register, changelog | no word | register row, a line under the release that names the card; VERSION: see VERSION | tests/test_mw031_git_builtins.py::test_register_changelog_and_card_name_the_card |
 | E8 | the check on this machine's list | a warning | the plain match line, no warning | tests/test_mw031_git_builtins.py::test_the_list_gives_this_machine_no_warning |
 
 ## 8. Log
@@ -50,3 +50,4 @@ machine `check` prints no warning.
 | 2026-11-11 | green: list, `profiles.git_builtins_extra`, `helpers.git_form_problem(extra)`, `git_builtins_line(extra)`, schema group, KEYS.md rows, `tests/test_keys.py` expected set gains `lock_gate.git_builtins_extra` and `tests/test_schema.py` expected groups gain `lock_gate` (test changes for the new key: same checks, one more expected entry each, not weakened); register row, changelog line | the commit that carries this line | rows E1 to E7 green |
 | 2026-11-11 | whole suite, `python -m pytest`, term scan included; no term-scan exception added | the commit that carries this line | 869 passed in 419 s |
 | 2026-11-11 | MW-027 ported onto master 4fd59c6: it bumps VERSION to 0.2.7, so row E7's «VERSION still 0.2.6» cannot hold; the row and the version pin in the test read 0.2.7, the same change MW-027 makes in the version pins of the older cards; the register and changelog asserts are kept | the commit that carries this line | see the MW-027 Log |
+| 2026-11-12 | MW-040: row E7 named a release number or an old VERSION | the commit that carries this line | the row says «see VERSION» and «the release that names the card»; its test reads the VERSION file and finds the card's changelog line (`tests/_docs.py`), no release number is pinned |

@@ -74,5 +74,13 @@
       "update-index", "update-ref", "update-server-info", "upload-archive", "upload-archive--writer",
       "upload-pack", "var", "verify-commit", "verify-pack", "verify-tag", "version", "whatchanged", "worktree",
       "write-tree"]
+  },
+  "wake": {
+    "mode": "on",
+    "deadline_seconds": 14400,
+    "poll_seconds": 5
+  },
+  "paths": {
+    "outside_writable": ["<home>/.claude/projects/*/memory/**", "<home>/.claude/plans/**", "<temp>/claude/**"]
   }
 }

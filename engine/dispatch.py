@@ -19,6 +19,7 @@ import importlib
 import json
 import os
 import re
+import secrets
 import sys
 import time
 from dataclasses import dataclass, field
@@ -37,6 +38,8 @@ TOOL_EVENTS = ("PreToolUse", "PostToolUse")
 BLOCK_EVENTS = ("Stop", "PostToolUse", "UserPromptSubmit")  # top-level `decision: block` + `reason`
 BLOCKING_GROUPS = ("edit", "shell")  # = the manifest group table's `onFailure: block` (R13c; test E54)
 CONTEXT_EVENTS = ("PreToolUse", "PostToolUse", "UserPromptSubmit", "Stop", "SessionStart")
+REPAIR = ("Repair: run `mkway check` (it changes no state) and report its output to the operator; the owner repairs "
+          "the settings or the engine copy (a protected target), then the call is repeated")
 NOT_A_BREACH = ("the gate's own code failed; this is not a rule breach. Report it, and do not change your work to "
                 "satisfy a broken gate")
 
@@ -121,7 +124,7 @@ def make_context(*, profile, root, session_id, event, gate, tool_name, tool_inpu
         profile_file=Path(profile_file) if profile_file else paths.profile_path(root),
         norm=lambda p, cwd=None: helpers.norm(p, root, top_prefix=prefix, home=home, cwd=cwd),
         commit_cmd=lambda cmd: helpers.commit_cmd(cmd, root=root, shell=shell, start=start),
-        shell_writes=lambda cmd: helpers.shell_writes(cmd, shell, cwd=start, root=root),
+        shell_writes=lambda cmd, home=None: helpers.shell_writes(cmd, shell, cwd=start, root=root, home=home),
         mkway_calls=lambda cmd: helpers.mkway_calls(cmd, shell),
         records=records.View(state, session_id, closed=lambda: register.closed_ids(root, profile)), env=env)
 
@@ -146,8 +149,16 @@ def render(event: str, refusal, warns: list):
         refusal = None
     if refusal is None and not context:
         return 0, "", ""
+    if event == "Stop":  # MW-075: a Stop warn is shown to the user only; additionalContext would wake the session again
+        out = {"decision": "block", "reason": refusal} if refusal else {}
+        if context:
+            out["systemMessage"] = context
+        return 0, json.dumps(out), ""
     if event not in CONTEXT_EVENTS:
-        return (2, "", refusal + "\n") if refusal else (0, "", "")
+        if refusal:
+            return 2, "", refusal + "\n"
+        # R271c: a warn on SubagentStop (a failed agent record) is a visible message: the event carries no context
+        return (0, json.dumps({"systemMessage": context}), "") if context else (0, "", "")
     out: dict = {}
     specific: dict = {"hookEventName": event}
     if refusal and event == "PreToolUse":
@@ -210,6 +221,132 @@ def _notify_trip(state, gate_name: str, counts: dict) -> None:
                             f"returns it to blocking with `mkway gate on {gate_name}`")
 
 
+NE = "not established"  # a value the record does not hold is never guessed
+
+
+def _deliver_refusal(root, profile, state, session, payload, warns: list, log, log_errors: list):
+    """MW-128 (R301, R301a): the Stop step. When the last engine call of this session's turn was refused and nothing was sent on,
+    the engine writes the refusal into the orderer's inbox itself, records the gate refusal row id as delivered and blocks ONCE
+    with the exact ping line, never when `stop_hook_active` is true and never twice for one id. The facts come from the engine's
+    own records, never the transcript; `core_refusal` decides. Returns (the block reason or None to let the Stop pass, the action:
+    `allow`, `block`, `delivered`, `no-orderer` or `error`; MW-132 runs its own step only after `allow`). A Stop hook
+    cannot fail closed: when a fact cannot be read or the inbox row cannot be written, the stop is allowed with a calls-log
+    error row (reason `refusal-delivery-failed`), a screen line and, from the row, a notice on this session's start line; the id
+    is not recorded as delivered, so the next Stop tries once more."""
+    import core_refusal as core
+    import messages
+    refusal_id = None
+    try:
+        shared = profiles.shared_state_dir(root, profile)
+        sends = tuple(messages.sends_by(shared, session))
+        orderer = messages.orderer_of(root, profile, session)
+        delivered = frozenset(gatemode.delivered_ids(state))
+        hook_active = bool(payload.get("stop_hook_active"))
+
+        def decided(rows):
+            facts = core.Facts(calls=tuple(core.Call(c["call"], c["time"], c["refused"], c["id"]) for c in rows),
+                               sends=sends, orderer=orderer, delivered=delivered, hook_active=hook_active)
+            return core.decide(facts)
+
+        calls = gatemode.turn_calls(state, session)
+        decision = decided(calls)
+        if decision.action == core.ALLOW:  # R301a 2: a refusal whose write failed once is tried again at the next stop
+            retry = gatemode.retry_candidate(state, session)
+            if retry:
+                calls = [retry]
+                decision = decided(calls)
+        refusal_id = decision.refusal_id
+        if decision.action == core.ALLOW:
+            return None, "allow"
+        row = calls[-1]
+        if decision.action == core.NO_ORDERER:
+            log(logs.row(session=session, event="Stop", tool=None, gate="refusal_delivery", reason_id="refusal-no-orderer",
+                         target=None, kind="log", refusal=refusal_id))
+            gatemode.mark_delivered(state, refusal_id, session, "no-orderer")
+            return None, "no-orderer"
+        sent = messages.send_refusal(root, profile, shared, session, decision.orderer, row.get("target") or NE,
+                                     row.get("message") or NE, refusal_id)
+        outcome = core.finish(decision, True)
+        gatemode.mark_delivered(state, refusal_id, session, "delivered", sent.row["id"])
+        log(logs.row(session=session, event="Stop", tool=None, gate="refusal_delivery", reason_id="refusal-delivered",
+                     target=None, kind="log", refusal=refusal_id, inbox_id=sent.row["id"], to=decision.orderer))
+        return (core.block_reason(sent.row["id"]), "block") if outcome.block else (None, "delivered")
+    except Exception as exc:
+        cls = exc.__class__.__name__
+        _guarded(log_errors, lambda: gatemode.append_call(
+            state, "refusal_delivery", "error", session=session, event="Stop", reason_id="refusal-delivery-failed",
+            refusal=refusal_id, error=cls, message=_error_line(exc)))
+        warns.append(f"mkway refusal-delivery-failed: the refusal of your last engine call could not be written to your "
+                     f"orderer ({cls}); nothing was blocked. Tell your orderer yourself: send the exact command and the "
+                     f"refusal line with `mkway send` (the row is in gate_calls.jsonl)")
+        return None, "error"
+
+
+def _count(value):
+    """The number of items of a hook input list (`background_tasks`); None when the field is absent or no list."""
+    return len(value) if isinstance(value, (list, tuple)) else None
+
+
+def _hand_off(root, profile, state, session, payload, warns: list, log_errors: list):
+    """MW-132 (R337, R337a, R338, R338a): the Stop step after MW-128's. A session that holds a card its orderer ordered and ends its
+    turn with no `mkway send` to that orderer has its last message (a hook input field, cut) written into the orderer's inbox at
+    once, once per turn; a builder (its orderer a registered lead) is then blocked ONCE with the exact ping line, never when
+    `stop_hook_active` is true. The facts come from the engine's own records and the hook input, never the transcript;
+    `core_handoff` decides. Returns the block reason or None. A Stop hook cannot fail closed: when a fact cannot be read or the
+    inbox row cannot be written, the stop is allowed with a calls-log error row (reason `handoff-notice-failed`, which is also
+    this turn's try), a screen line and a start-line notice."""
+    import core_handoff as core
+    import leads
+    import messages
+    import register
+    try:
+        shared = profiles.shared_state_dir(root, profile)
+        held = messages.held_card(root, profile, session)  # raises on a failed read: never «no card» or «no orderer»
+        if held is None or leads.is_lead(shared, session):
+            return None
+        card, ordered = held
+        hook_active = bool(payload.get("stop_hook_active"))
+        turn = gatemode.handoff_turn(state, session, hook_active)
+        if turn is None:  # the engine saw no turn of this session begin (no prompt row): nothing is judged, one record row
+            logs.write_refusal(state, logs.row(session=session, event="Stop", tool=None, gate="handoff", reason_id=core.NO_TURN_START_ID,
+                                               target=None, kind="log", card=card))
+            return None
+        facts = core.Facts(
+            session=session, card=card, orderer=None if not ordered or ordered == register.OWNER else ordered,
+            role=messages.role_of(root, profile, shared, session).kind, turn_start=turn,
+            sends=tuple(messages.sends_to(shared, session)), delivered=gatemode.turn_delivered(state, session, turn),
+            hook_active=hook_active, background_tasks=_count(payload.get("background_tasks")))
+        decision = core.decide(facts)
+        if decision.action == core.ALLOW:
+            return None
+        if decision.action == core.NO_ORDERER:
+            logs.write_refusal(state, logs.row(session=session, event="Stop", tool=None, gate="handoff", reason_id="handoff-no-orderer",
+                                               target=None, kind="log", card=card, turn=turn, orderer=ordered or NE))
+            return None
+        sent = messages.send_handoff(root, profile, shared, session, decision.orderer,
+                                     core.notice_body(session, card, payload.get("last_assistant_message")), card)
+        outcome = core.finish(decision, True)
+        logs.write_refusal(state, logs.row(session=session, event="Stop", tool=None, gate="handoff", reason_id="handoff-notice",
+                                           target=None, kind="log", card=card, to=decision.orderer, inbox_id=sent.row["id"],
+                                           turn=turn, blocked=outcome.block, background_tasks=facts.background_tasks))
+        return core.block_reason(card, sent.row["id"]) if outcome.block else None
+    except Exception as exc:
+        cls = exc.__class__.__name__
+        _guarded(log_errors, lambda: gatemode.append_call(
+            state, "handoff", "error", session=session, event="Stop", reason_id="handoff-notice-failed", error=cls,
+            message=_error_line(exc)))
+        warns.append(f"mkway handoff-notice-failed: your last message could not be written to your orderer ({cls}); nothing was "
+                     f"blocked. Tell your orderer yourself: `mkway send` your question, your result, or what you wait for "
+                     f"(the row is in gate_calls.jsonl)")
+        return None
+
+
+def _error_line(exc: BaseException) -> str:
+    """The first line of the error's text, at most 200 characters; the class name when the error has no text."""
+    lines = str(exc).strip().splitlines()
+    return lines[0][:200] if lines else exc.__class__.__name__
+
+
 def _crash(exc: Exception, info: dict) -> Result:
     """The outer error handler. In the groups whose entry carries `onFailure: block` (edit, shell) a failure the
     dispatcher cannot evaluate past exits 2, so the tool call is blocked with the reason. Every failure in the other
@@ -230,8 +367,8 @@ def _crash(exc: Exception, info: dict) -> Result:
     where = f"gate {info['gate']}" if info["gate"] else info["where"]
     outcome = ("the tool call is blocked, because the dispatcher could not evaluate its gates. The dispatcher's "
                "own code failed; this is not a rule breach. Report it, and do not change your work to satisfy a "
-               "broken dispatcher." if blocking else "nothing was blocked.")
-    line = (f"mkway dispatcher-error: {cls} in {where}; {outcome} "
+               "broken dispatcher. " + REPAIR if blocking else "nothing was blocked.")
+    line = (f"mkway dispatcher-error: {cls} ({_error_line(exc)}) in {where}; {outcome} "
             + ("Logged in refusals.jsonl." if written else "The dispatcher-error row could not be written."))
     return Result(2 if blocking else 0, json.dumps({"systemMessage": line}), line + "\n", [])
 
@@ -263,6 +400,7 @@ def _run(event, group, stdin_text, env, root_arg, profile_arg, engine_dir, manif
     target = logs.target_of(tool_input)
     entries = manifest if manifest is not None else load_manifest(engine_dir)
     started = time.perf_counter()
+    call_id = secrets.token_hex(6)  # MW-128: the rows of this hook call in the calls log share it
     gates_ms: dict = {}
     warns: list = []
     refusal = None
@@ -340,7 +478,8 @@ def _run(event, group, stdin_text, env, root_arg, profile_arg, engine_dir, manif
                 applied = REFUSE if e.get("onFailure") == "block" else ALLOW
                 log(base_row(name, "gate-error", "error", exception=cls, applied=applied))
                 if applied == REFUSE:
-                    refusal = _tag(name, "gate-error", f"gate {name} failed with {cls}: {NOT_A_BREACH}")
+                    refusal = _tag(name, "gate-error", f"gate {name} failed with {cls} ({_error_line(error)}): "
+                                                       f"{NOT_A_BREACH}. {REPAIR}")
                 call_verdict = "error"
             elif verdict.kind != ALLOW:
                 if verdict.reason_id in reason_ids:
@@ -355,11 +494,18 @@ def _run(event, group, stdin_text, env, root_arg, profile_arg, engine_dir, manif
                     if not watching:
                         refusal = tagged
                 elif verdict.kind != LOG:  # a log verdict is the row only (list item 5, R43 (c))
-                    warns.append(tagged)
+                    # MW-075: the same Stop warn text is shown once per session; the row above is written either way
+                    if event != "Stop" or ctx.once([tagged]):
+                        warns.append(tagged)
                 call_verdict = "refuse" if verdict.kind == REFUSE else "log"
             else:
                 call_verdict = "allow"
-            _guarded(log_errors, lambda: gatemode.append_call(state, mode_gate, call_verdict))  # MW-012, rule 2
+            call_facts = {"session": session, "event": event, "tool": tool, "call": call_id}  # MW-128: whose call it is
+            if call_verdict == "refuse":  # MW-128: the exact command, the refusal line and the reason, for the refusal delivery
+                call_facts.update(target=target, message=tagged, reason_id=verdict.reason_id,
+                                  watching=True if watching else None)
+            _guarded(log_errors, lambda: gatemode.append_call(state, mode_gate, call_verdict, round(elapsed_ms, 3),
+                                                              **call_facts))  # MW-012, rule 2; MW-112: the time of the gate
             if call_verdict == "refuse" and form and not watching:  # MW-012, rule 4: this call stays refused
                 tripped = _guarded(log_errors, lambda: gatemode.trip(state, profile, mode_gate))
                 if tripped:
@@ -372,10 +518,16 @@ def _run(event, group, stdin_text, env, root_arg, profile_arg, engine_dir, manif
             info["gate"] = None
             if refusal:
                 break
+    if event == "Stop" and group == "stop" and refusal is None and not errors and isinstance(session, str) and session:
+        refusal, refusal_action = _deliver_refusal(root, profile, state, session, payload, warns, log, log_errors)  # MW-128 (R301, R301a)
+        if refusal is None and refusal_action == "allow":  # MW-132: only when MW-128 did nothing at this stop (R1-10)
+            refusal = _hand_off(root, profile, state, session, payload, warns, log_errors)
     if head:
         warns.insert(0, head)
     timing = {"time": logs.now().isoformat(timespec="milliseconds"), "session": session, "event": event,
               "group": group, "gates_ms": gates_ms, "total_ms": round((time.perf_counter() - started) * 1000, 3)}
+    if event == "Stop":  # MW-132 (R340a): a Stop row keeps the hook input's flag; a stop with it true continues the turn before it
+        timing["stop_hook_active"] = bool(payload.get("stop_hook_active"))
     _guarded(log_errors, lambda: logs.write_timing(state, timing))
     code, out, err = render(event, refusal, warns)
     if event == "SessionStart" and isinstance(profile, dict) and not errors:

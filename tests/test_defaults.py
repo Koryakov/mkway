@@ -6,6 +6,8 @@ engine/KEYS.md as «later (...)» or «not established (...)», never both.
 import json
 from pathlib import Path
 
+import pytest
+
 from _keys_md import section_rows, unquote
 
 REPO = Path(__file__).resolve().parents[1]
@@ -22,8 +24,11 @@ EXPECTED = {
                         "language", "texts"],
     "lock_gate": ["git_builtins"],  # MW-003 close-fix 8 (R90): an engine constant, not from the port map
     "locks": ["targets"],  # MW-018 (E10): the engine default lock target `inbox`; the key is in the schema too
+    "wake": ["mode", "deadline_seconds", "poll_seconds"],  # MW-078: the inbox waiter; the keys are in the schema too
+    "paths": ["outside_writable"],  # MW-103 (R255b), R274-D1: the default writable folders outside the repository, for every session; in the schema too
 }
 NL_LATER = "later (natural-language content; needs an owner read)"
+KEYS = [pytest.param(c, k, id=f"{c}.{k}") for c, keys in EXPECTED.items() for k in keys]
 
 
 def _defaults():
@@ -35,22 +40,20 @@ def _marks():
     return {(unquote(r[0]), unquote(r[1])): r[2] for r in section_rows("Engine defaults")}
 
 
-def test_every_default_key_is_placed_once():
-    """E17: each of the 31 keys of the port map, and the one engine constant added by MW-003 close-fix 8, is either in
-    defaults.json or marked later / not established in KEYS.md."""
+@pytest.mark.parametrize("config, key", KEYS)
+def test_every_default_key_is_placed_once(config, key):
+    """Checks: the key is in defaults.json or marked later or not established in KEYS.md, never both (E17)."""
+    # the 31 port-map keys and the engine constant of MW-003 close-fix 8, each in defaults.json or marked in KEYS.md
     expected = {(c, k) for c, keys in EXPECTED.items() for k in keys}
-    assert len(expected) == 33  # changed by MW-018: `locks.targets`
+    assert len(expected) == 37  # changed by MW-018: `locks.targets`; MW-078: the three `wake` keys; MW-103: `leads.outside_writable`
     defaults = _defaults()
     in_json = {(c, k) for c, group in defaults.items() for k in group}
     marks = _marks()
     assert set(marks) == expected, "KEYS.md must list each of the 32 keys once"
     assert in_json <= expected, sorted(in_json - expected)
-    for key, verdict in marks.items():
-        if verdict == "in defaults.json":
-            assert key in in_json, key
-        else:
-            assert verdict.startswith(("later (", "not established (")), key
-            assert key not in in_json, key
+    verdict = marks[(config, key)]
+    assert ((config, key) in in_json) == (verdict == "in defaults.json"), key
+    assert verdict == "in defaults.json" or verdict.startswith(("later (", "not established (")), key
 
 
 MAP_TYPES = {  # the port map's types for the 23 keys of the 18 configs (section 3.2); the 8 decision_search types are taken from the pin values
@@ -70,24 +73,25 @@ MAP_TYPES = {  # the port map's types for the 23 keys of the 18 configs (section
     ("decision_search", "noise_suffixes"): list, ("decision_search", "formats"): dict,
     ("decision_search", "language"): dict, ("decision_search", "texts"): dict,
     ("lock_gate", "git_builtins"): list, ("locks", "targets"): list,
+    ("wake", "mode"): str, ("wake", "deadline_seconds"): int, ("wake", "poll_seconds"): int,
+    ("paths", "outside_writable"): list,
 }
 
 
-def test_defaults_read_at_pin_have_map_types():
-    """E24: after the pin read no key stays «not established»; each value in defaults.json has the map's type."""
+@pytest.mark.parametrize("config, key", KEYS)
+def test_defaults_read_at_pin_have_map_types(config, key):
+    """Checks: after the pin read the key is not not-established, and a value in defaults.json has the map type (E24)."""
     assert set(MAP_TYPES) == {(c, k) for c, keys in EXPECTED.items() for k in keys}
-    marks = _marks()
-    assert not [k for k, v in marks.items() if v.startswith("not established")]
-    defaults = _defaults()
-    for (config, key), verdict in marks.items():
-        if verdict == "in defaults.json":
-            value = defaults[config][key]
-            assert type(value) is MAP_TYPES[(config, key)], (config, key)
+    assert not [k for k, v in _marks().items() if v.startswith("not established")]
+    verdict = _marks()[(config, key)]
+    assert not verdict.startswith("not established")
+    assert verdict != "in defaults.json" or key in _defaults().get(config, {}), (config, key)
+    value = _defaults().get(config, {}).get(key)
+    assert verdict != "in defaults.json" or type(value) is MAP_TYPES[(config, key)], (config, key)
 
 
-def test_natural_language_defaults_are_later():
-    """E18: `language` and `texts` are not copied; they are «later (natural-language content; needs an owner read)»."""
-    marks = _marks()
-    for key in ("language", "texts"):
-        assert marks[("decision_search", key)] == NL_LATER
-        assert key not in _defaults().get("decision_search", {})
+@pytest.mark.parametrize("key", ["language", "texts"])
+def test_natural_language_defaults_are_later(key):
+    """Checks: `language` and `texts` are not copied; they are «later (natural-language content; needs an owner read)» (E18)."""
+    assert _marks()[("decision_search", key)] == NL_LATER
+    assert key not in _defaults().get("decision_search", {})

@@ -1,36 +1,55 @@
-"""The commit gate (card MW-006): a session's `git commit` holds only files inside the open card's Paths, no junk and no
-data files, and its message names the open card.
+"""The commit gate (cards MW-006, MW-052): a session's `git commit` holds only files inside the open card's Paths, no junk
+and no data files, and its message names the open card.
 
-One manifest entry, `commit_files` (shell group; one profile switch, `gates.commit_files`): it reads each `git commit`
-of a shell command, judges the files the commit takes (the staged list always, and the files a `--`, `-a` or `-i`
-form adds) and refuses it, naming the way out. MW-034: there is no record of who wrote a file; a ride-in is stopped by
-the card's Paths and by one builder per task root (`take-root-busy`, the lock gate).
+One manifest entry, `commit_files` (shell group; one profile switch, `gates.commit_files`). Since MW-052 the decision is
+the pure `core.decide_commit(facts)`; this module is the thin shell around it: `read_facts` builds the `Facts` record (the
+git staged list, the modified-tracked list, the card row, the cards the session ordered and who holds them, the profile,
+file sizes and ignore answers, as data), `write_records` appends the rows of the verdict, and `to_gate` maps the verdict
+to the dispatcher's own kinds.
 
-The junk patterns, the data patterns and the size limit are profile keys with defaults (`settings`); no task name and
-no natural-language word is in this file. The owner's terminal runs no hook, so it is not gated.
+The commit is judged by the files git will put in it (MW-043: `-- <paths>` the named paths alone, `-i -- <paths>` the
+staged list plus the named, a plain commit the staged list, `-a` the staged list plus every modified tracked file).
+`taken` is the ONE reader of that list: `commit_files` reads it here and `commit_tests` calls it (card MW-060); the
+table that combines git's two lists, `combine`, and the form that takes no file, `message_only_amend` (MW-058), are the
+core's pure functions. MW-053: a session that ORDERED a card (its id in the register's `Ordered by`) may commit the card's
+folder and the register without holding the card; a file the holder's Paths cover is the holder's. MW-034: there is no
+record of who wrote a file; a ride-in is stopped by the card's Paths and by one builder per task root
+(`take-root-busy`, the lock gate). MW-102 (R254): the verdict file `tests/verdicts/<card>.md` is committed by the orderer of its
+card alone (the shell passes each ordered card's verdict path as a fact), and a commit that takes it runs the close's row proof
+on the content the commit takes (refusal `verdict-unproven`); as at close, no checker or `cards.verdicts: off` skips the proof.
+
+The junk patterns, the data patterns and the size limit are profile keys with defaults (`settings`); no task name and no
+natural-language word is in this file. The owner's terminal runs no hook, so it is not gated.
 """
 from __future__ import annotations
 
-import re
+import dataclasses
+from pathlib import Path
 
 import cardtool
+import core
 import gate
 import helpers
+import leads
+import logs
+import owners
 import profiles
 import register
 import rules
 import runner
+import verdicts
 
-CLI = "python mkway/engine/mkway.py"
-SHOWN = 8  # files named in one refusal; the rest are counted
-READ_ONLY_GIT = {"commit", "status", "diff", "log", "show", "rev-parse", "ls-files", "ls-tree", "cat-file",
-                 "check-ignore", "rev-list", "describe", "grep", "shortlog", "blame", "show-ref", "name-rev",
-                 "diff-tree", "diff-index", "diff-files", "version", "help"}
-SHELL_TOOLS = ("Bash", "PowerShell")
-JUNK = ["__pycache__/", "*.pyc", ".pytest_cache/", ".pytest_tmp/", "*.log", "*.tmp", "*.orig", "*.rej", ".DS_Store",
-        "Thumbs.db"]
-DATA = ["*.csv", "*.tsv", "*.xlsx", "*.xls", "*.parquet", "*.db", "*.sqlite", "*.sqlite3", "*.bak", "*.dump"]
-MAX_FILE_KB = 1024
+CLI = core.CLI
+SHOWN = core.SHOWN
+READ_ONLY_GIT = core.READ_ONLY_GIT
+SHELL_TOOLS = core.SHELL_TOOLS
+JUNK = list(core.JUNK)
+DATA = list(core.DATA)
+MAX_FILE_KB = core.MAX_FILE_KB
+ORDERER_RULE = core.ORDERER_RULE
+ORDERER_OWN = core.ORDERER_OWN
+combine = core.combine  # MW-060: the pure table is the core's; both gates read it through `taken`
+message_only_amend = core.message_only_amend  # MW-058
 
 
 def _patterns(value):
@@ -58,92 +77,279 @@ def settings(profile) -> dict:
             "max_file_kb": _limit(raw.get("max_file_kb")) or MAX_FILE_KB}
 
 
-# ---- the commit gate ------------------------------------------------------------------------------------------------
+# ---- the gate: read the facts, decide in the core, write the verdict -------------------------------------------------------
 
 def check(event, ctx):
-    """The commit gate (entry `commit_files`): refuses a `git commit` of a shell command that holds a file outside
-    the open card's Paths (`file-not-in-card`), and fails closed
-    (`commit-unreadable`, `register-tampered`) when it cannot read the commit. Everything else is allowed."""
-    profile = ctx.profile if isinstance(ctx.profile, dict) else {}
-    tool_input = ctx.tool_input if isinstance(ctx.tool_input, dict) else {}
-    if ctx.tool_name not in SHELL_TOOLS or profiles.vcs(profile) != "git":
-        return gate.allow()
-    command = tool_input.get("command")
-    shell = "powershell" if ctx.tool_name == "PowerShell" else "bash"
+    """The commit gate (entry `commit_files`). A read that raises is a refusal `commit-unreadable`, as a git read that
+    does not answer: the gate fails closed."""
     try:
-        return _shell(ctx, profile, command if isinstance(command, str) else "", shell)
+        facts = read_facts(event, ctx)
     except runner.TimeoutExpired as exc:
-        return gate.refuse("commit-unreadable", f"a git read did not answer within {exc.timeout:g} s, so the commit "
-                                                f"could not be checked; run it again")
+        return gate.refuse("commit-unreadable", _timeout_text(exc))
     except (OSError, ValueError, runner.Refused) as exc:
-        return gate.refuse("commit-unreadable", f"git could not be read ({exc.__class__.__name__}), so the commit "
-                                                f"could not be checked; run it again from the repository")
+        return gate.refuse("commit-unreadable", _failed_text(exc))
+    verdict = core.decide_commit(facts)
+    write_records(ctx, verdict.records)
+    if verdict.kind != core.REFUSE:
+        _record_commit(ctx, facts)
+    return to_gate(verdict)
 
 
-def _unreadable(command: str, shell: str, extra=frozenset()):
-    """The text of what makes a commit of this command unreadable, or None (the lock gate's own conditions)."""
-    if not helpers.parse_ok(command, shell) and helpers.names_git_commit(command):
-        return "this command cannot be parsed and holds a `git ... commit`"
-    carrier = helpers.carried_commit(command, shell)
-    if carrier:
-        return f"this command may run a `git ... commit` the gate cannot read (through {carrier})"
-    form = helpers.git_form_problem(command, shell, extra)
-    if form:
-        return form[1]
-    shape = helpers.unknown_shape(command, shell)
-    if shape and helpers.names_git_commit(command):
-        return f"this command holds a shape the gate does not follow ({shape}) and names a `git ... commit`"
-    return helpers.env_problem(command, shell) or (
-        "this command holds `CDPATH` and a `cd`" if helpers.cdpath_cd(command, shell) else None)
+def _record_commit(ctx, facts) -> None:
+    """MW-068 (R173 item 1): at the PreToolUse of an allowed commit, append one row to `commit_records.jsonl`: the hook's
+    session id, the git tree id the gate builds for the commit (MW-060, `gate_commit_tests.tree_id`) and the paths it takes
+    (`core.commit_record`). The close-time verdict check matches a test file's commits to these rows by tree sha. It never
+    blocks a commit: a record that cannot be made is left out (the verdict check then judges the file by the holder alone)."""
+    try:
+        commits = facts.commits
+        if isinstance(commits, core.Unread) or len(commits) != 1:
+            return
+        parsed = ctx.commit_cmd(facts.command)
+        if len(parsed) != 1:
+            return
+        import gate_commit_tests  # late: it imports this module
+        found = core.commit_record(ctx.session_id, gate_commit_tests.tree_id(ctx, parsed[0]), commits[0].taken)
+        if found:
+            name, row = found
+            write_records(ctx, [(name, {**row, "time": logs.now().isoformat(timespec="milliseconds")})])
+    except Exception:  # a record is never a reason to stop a commit
+        return
 
 
-def _git_words(command: str, shell: str):
-    """The git subcommand of every simple command of the text, substitutions included."""
-    for s in helpers.parse(command, shell):
-        argv = helpers._argv(s.words)
-        if helpers._prog(argv) == "git":
-            yield helpers._git_sub(argv)[0]
-        for sub in s.subs:
-            yield from _git_words(sub, shell)
-
-
-def _shell(ctx, profile, command: str, shell: str):
-    why = _unreadable(command, shell, profiles.git_builtins_extra(profile))
-    if why:
-        return gate.refuse("commit-unreadable", f"{why}, so its commit cannot be checked; run the commit alone, in a "
-                                                f"plain form: `git commit -m \"<message>\" -- <paths>`")
-    commits = ctx.commit_cmd(command)
-    if not commits:
-        return gate.allow()
-    other = sorted({sub for sub in _git_words(command, shell) if sub not in READ_ONLY_GIT}, key=str)
-    if other:
-        return gate.refuse("commit-unreadable", f"this command runs `git {other[0]}` beside the commit; the hook "
-                                                f"reads the index before the command runs, so what the commit holds "
-                                                f"cannot be checked; run git {other[0]} and git commit as two "
-                                                f"separate calls: `git {other[0]}` in a call of its own, then the "
-                                                f"commit alone")
-    for commit in commits:
-        verdict = _commit(ctx, profile, commit)
-        if verdict is not None:
-            return verdict
+def to_gate(verdict):
+    """The dispatcher's verdict of a core verdict: allow, refuse, and allow-with-line as a `log` row."""
+    if verdict.kind == core.REFUSE:
+        return gate.refuse(verdict.reason, verdict.text)
+    if verdict.kind == core.ALLOW_LINE:
+        return gate.log(verdict.reason, verdict.text)
     return gate.allow()
 
 
-def _list(rels: list) -> str:
-    rels = list(dict.fromkeys(rels))
-    shown = ", ".join(rels[:SHOWN])
-    return shown + (f" and {len(rels) - SHOWN} more" if len(rels) > SHOWN else "")
+def write_records(ctx, records):
+    """Append each (file name in the state folder, row) of a verdict."""
+    state = profiles.state_dir(ctx.root, ctx.profile if isinstance(ctx.profile, dict) else {})
+    for name, row in records:
+        logs.append_jsonl(state / name, row)
 
 
-def _name_status(ctx, folder, *args):
-    """[(status letter, repo path)] of a `git diff --name-status -z` read; None when git does not answer 0."""
+def _timeout_text(exc) -> str:
+    return (f"a git read did not answer within {exc.timeout:g} s, so the commit could not be checked; run it again")
+
+
+def _failed_text(exc) -> str:
+    return (f"git could not be read ({exc.__class__.__name__}), so the commit could not be checked; run it again from "
+            f"the repository")
+
+
+def _unread(exc) -> core.Unread:
+    return core.Unread(_timeout_text(exc) if isinstance(exc, runner.TimeoutExpired) else _failed_text(exc))
+
+
+_READ_ERRORS = (runner.TimeoutExpired, OSError, ValueError, runner.Refused)
+
+
+def facts_of_event(tool_name, tool_input, profile) -> core.Facts:
+    """The facts the event and the profile give, with no commit read: the tool, the command text, the shell kind, the
+    git built-in lists, the settings and the switches of the profile."""
+    profile = profile if isinstance(profile, dict) else {}
+    tool_input = tool_input if isinstance(tool_input, dict) else {}
+    command = tool_input.get("command")
+    cfg = settings(profile)
+    try:
+        id_pattern = cardtool.id_pattern(profile).pattern
+    except cardtool.CardError:  # no `ids.card_prefix`: only the open card's own id is a whole id
+        id_pattern = None
+    return core.Facts(
+        tool_name=tool_name, vcs=profiles.vcs(profile) or "",
+        command=command if isinstance(command, str) else "", shell="powershell" if tool_name == "PowerShell" else "bash",
+        git_builtins=frozenset(helpers.git_builtins()), git_builtins_extra=frozenset(profiles.git_builtins_extra(profile)),
+        junk=tuple(cfg["junk"]), data_patterns=tuple(cfg["data_patterns"]), max_file_kb=cfg["max_file_kb"],
+        message_card_on=profiles.gate_on(profile, "commit_files.message_card", True), card_id_pattern=id_pattern,
+        verdict_dir=verdicts.VERDICT_DIR, cli=CLI)
+
+
+def read_facts(event, ctx) -> core.Facts:
+    """The `Facts` of this event. Git is read only for a commit the command text alone does not decide (`core.precheck`),
+    and for each commit only what the decision can need; a read that fails is an `Unread` fact, not an exception."""
+    profile = ctx.profile if isinstance(ctx.profile, dict) else {}
+    tool_input = ctx.tool_input if isinstance(ctx.tool_input, dict) else {}
+    facts = facts_of_event(ctx.tool_name, tool_input, profile)
+    if ctx.tool_name not in SHELL_TOOLS or facts.vcs != "git":
+        return facts
+    parsed = ctx.commit_cmd(facts.command)
+    commits = tuple(core.CommitFacts(message=c.message, paths=tuple(c.paths), all=c.all, include=c.include,
+                                     amend=c.amend, only=c.only, folder_unreadable=c.folder_unreadable, taken=())
+                    for c in parsed)
+    facts = dataclasses.replace(facts, commits=commits)
+    if core.precheck(facts) is not None:
+        return facts
+    card = {**_card(ctx, profile), **_orderer(ctx, profile)}
+    read = [_commit_facts(ctx, profile, cf, c, card.get("ordered", ())) for cf, c in zip(commits, parsed)]
+    return dataclasses.replace(facts, commits=tuple(read), **card)
+
+
+def free_entries(profile, register_rel) -> tuple:
+    """The files no rule of the card's Paths applies to, read from the owner table (MW-107): the register, the ledger rows
+    and the quote files of the ledger folder, and the profile's `paths.exempt`."""
+    entries = [register_rel, *owners.patterns_of("ledger", profile), *owners.patterns_of("quote-file", profile),
+               *owners.patterns_of("exempt", profile)]
+    return tuple(e for e in entries if e)
+
+
+def _card(ctx, profile) -> dict:
+    """The facts of the card this session holds, of the register's seal and of the files no card rule applies to."""
+    card_id = ctx.records.card()
+    out = {"card_id": card_id or None, "exempt": free_entries(profile, ctx.norm(str(register.path(ctx.root, profile)))),
+           "owner_fix": register.OWNER_FIX}
+    if not card_id:
+        return out
+    try:
+        problem = register.seal_problem(ctx.root, profile)
+        row = None if problem else register.find(register.read(ctx.root, profile), card_id)
+    except (*_READ_ERRORS, register.RegisterError) as exc:
+        out["register_problem"] = _unread(exc)
+        return out
+    out["register_problem"] = problem
+    if row:
+        folder = (row.get("folder") or "").strip().strip("`")
+        out.update(card_found=True, card_status=row.get("status"), card_folder=folder or None,
+                   card_paths=cardtool.paths_set(row.get("paths", "")))
+    return out
+
+
+def _orderer(ctx, profile) -> dict:
+    """MW-053: the cards this session ORDERED (the register's `Ordered by` cell is its session id) and who holds them.
+    Nothing for a session with no id or the owner's, or when the register cannot be read (the commit is then judged as
+    before); the holders are an `Unread` when the session records do not answer."""
+    session = ctx.session_id
+    if not isinstance(session, str) or not session.strip() or session == register.OWNER:
+        return {}
+    try:
+        mine = [r for r in register.read(ctx.root, profile) if r.get(register.ORDERED) == session and r.get("folder")]
+    except (OSError, ValueError, register.RegisterError):
+        return {}
+    if not mine:
+        return {}
+    ordered = tuple(core.Ordered(r["id"], r["folder"].strip().strip("`").rstrip("/"),
+                                 cardtool.paths_set(r.get("paths", "")), verdicts.verdict_file(r["id"])) for r in mine)
+    try:
+        holders = dict(ctx.records.holders())
+    except _READ_ERRORS as exc:
+        holders = _unread(exc)
+    return {"ordered": ordered, "holders": holders}
+
+
+def _commit_facts(ctx, profile, facts: core.CommitFacts, commit, ordered=()) -> core.CommitFacts:
+    """What git says of one commit: the files it takes, git's ignore answer for the added ones, the sizes, and the rule
+    cards among the files with the test each needs. A commit in an unreadable folder reads nothing; a message-only amend
+    takes no file, so nothing is read for it (MW-058)."""
+    if commit.folder_unreadable or core.message_only_amend(commit):
+        return facts
+    cwd = commit.cwd
+    if cwd:
+        rel = ctx.norm(cwd)
+        if rel is not None:
+            cwd = None if rel == "." else rel
+    folder = (ctx.root / cwd) if cwd else ctx.root
+    try:
+        taken = _taken(ctx, folder, commit)
+    except _READ_ERRORS as exc:
+        return dataclasses.replace(facts, taken=_unread(exc))
+    if taken is None:
+        return dataclasses.replace(facts, taken=core.Unread())
+    taken = tuple(taken)
+    try:
+        unproven = _unproven(ctx, profile, ordered, taken)
+    except (*_READ_ERRORS, cardtool.CardError) as exc:  # a verdict file that cannot be read is no file to let through
+        return dataclasses.replace(facts, taken=_unread(exc))
+    live = [(status, rel, source) for status, rel, source in taken if status != "D"]
+    added = [rel for status, rel, _source in live if status == "A"]
+    try:
+        ignored = _ignored(ctx, added)
+        ignored = core.Unread() if ignored is None else frozenset(ignored)
+    except _READ_ERRORS as exc:
+        ignored = _unread(exc)
+    try:
+        sizes = _sizes(ctx, [(rel, source) for _status, rel, source in live])
+        sizes = core.Unread() if sizes is None else sizes
+    except _READ_ERRORS as exc:
+        sizes = _unread(exc)
+    rule_cards, on_disk = {}, set()
+    if rules.active(profile):
+        for _status, rel, _source in live:
+            ident = rules.is_card(profile, rel)
+            if ident:
+                rule_cards[rel] = rules.test_path(profile, ident)
+        on_disk = {test for test in rule_cards.values() if (ctx.root / test).is_file()}
+    rels = [rel for _status, rel, _source in taken]
+    return dataclasses.replace(facts, taken=taken, ignored=ignored, sizes=sizes, rule_cards=rule_cards,
+                               tests_on_disk=frozenset(on_disk), unproven=unproven,
+                               roles={rel: owners.owner_of(rel, profile, root=ctx.root) for rel in rels if owners.owner_of(rel, profile, root=ctx.root)},
+                               own=_own(ctx, profile, rels, ordered),
+                               notes={rel: owners.describe(rel, profile, root=str(ctx.root)) for rel in rels})
+
+
+def _own(ctx, profile, rels, ordered) -> frozenset:
+    """MW-107: the taken paths this session's own writable set holds, the same rows `leads.writable` reads for the lead gate:
+    for a registered lead, everything it may write (its order files, the asks, the quote files); for a session that ordered a
+    card but is no lead, the asks and the quote files (the orderer's folders are the card rules'). The orderer's commit scope
+    is its writable set."""
+    session = ctx.session_id
+    if not isinstance(session, str) or not session.strip() or session == register.OWNER:
+        return frozenset()
+    if leads.is_lead(profiles.shared_state_dir(ctx.root, profile), session):
+        return frozenset(rel for rel in rels if leads.writable(ctx.root, profile, session, rel))
+    if not ordered:
+        return frozenset()
+    return frozenset(rel for rel in rels if (kind := owners.kind_of(rel, profile)) is not None
+                     and kind.role == owners.ORDERER and kind.edit and kind.name in ("asks", "quote-file"))
+
+
+def _unproven(ctx, profile, ordered, taken) -> dict:
+    """MW-102 (R254): for each verdict file of a card the session ordered that the commit takes, the rows the close's row
+    proof refuses, as ((node, why), ...), read from the content the commit takes: the staged blob for source `index`, the
+    working file for `work`. As at close (R179), with no `outbox.checkers` or `cards.verdicts: off` nothing is judged; only
+    the rows whose node an Acceptance row of the card names are judged. A deletion is judged by nothing."""
+    mine = {row.verdict: row for row in ordered if row.verdict}
+    out = {}
+    for status, rel, source in taken:
+        row = mine.get(rel)
+        if row is None or status == "D":
+            continue
+        checkers = profiles.outbox_settings(profile)["checkers"]
+        if not checkers or not cardtool.verdicts_required(profile):
+            continue
+        text = _verdict_text(ctx, rel, source)
+        card_text = (ctx.root / row.folder / "CARD.md").read_text(encoding="utf-8")
+        nodes = cardtool.test_nodes(card_text)
+        rows = [r for r in verdicts.parse_rows(text) if r.node in nodes]
+        state = profiles.state_dir(ctx.root, profile)
+        out[rel] = tuple(verdicts.proof_problems(ctx.root, state, checkers, row.id, rows, card_text).items())
+    return out
+
+
+def _verdict_text(ctx, rel: str, source: str) -> str:
+    """The text of a verdict file as the commit takes it: the staged blob (`index`) or the working file (`work`)."""
+    if source == "work":
+        return (ctx.root / rel).read_text(encoding="utf-8")
+    proc = runner.git(ctx.root, "show", f":./{rel}", text=False)
+    if proc.returncode != 0:
+        raise ValueError(f"git cannot show the staged {rel}")
+    return proc.stdout.decode("utf-8")
+
+
+# ---- the reads of git -------------------------------------------------------------------------------------------------------
+
+def _name_status(norm, folder, *args):
+    """[(status letter, path)] of a `git diff --name-status -z` read, each path through `norm` (a path it answers None
+    for is left out); None when git does not answer 0."""
     proc = runner.git(folder, *args)
     if proc.returncode != 0:
         return None
     parts = proc.stdout.split("\0")
     out = []
     for i in range(0, len(parts) - 1, 2):
-        rel = ctx.norm(parts[i + 1])
+        rel = norm(parts[i + 1])
         if rel is not None:
             out.append((parts[i][:1], rel))
     return out
@@ -153,172 +359,38 @@ def _has_head(folder) -> bool:
     return runner.git(folder, "rev-parse", "--verify", "-q", "HEAD").returncode == 0
 
 
-def _tracked_changes(ctx, folder, specs=()):
-    """The tracked changes against HEAD (with no HEAD yet, the index), limited to `specs` when given."""
+def _tracked_changes(norm, folder, specs=()):
+    """The tracked changes against HEAD (with no HEAD yet, the index), limited to `specs` when given. A file git does
+    not know (untracked, not staged) is never in the list, as git commits none."""
     tail = ["--", *specs] if specs else []
     if _has_head(folder):
-        return _name_status(ctx, folder, "diff", "--name-status", "--no-renames", "-z", "HEAD", *tail)
-    return _name_status(ctx, folder, "diff", "--cached", "--name-status", "--no-renames", "-z", *tail)
+        return _name_status(norm, folder, "diff", "--name-status", "--no-renames", "-z", "HEAD", *tail)
+    return _name_status(norm, folder, "diff", "--cached", "--name-status", "--no-renames", "-z", *tail)
+
+
+def taken(norm, folder, commit):
+    """[(status, path, source)] the commit would take (see `core.combine`), paths through `norm`: `commit_files` passes
+    its path normaliser (task-root paths), `commit_tests` the identity (repository paths). One reader for both gates (card
+    MW-060). None when git cannot tell. A message-only amend (`core.message_only_amend`) takes no files."""
+    if core.message_only_amend(commit):
+        return []
+    if commit.all:  # git refuses `-a` with paths; the wider reading is the safe one
+        named = _tracked_changes(norm, folder)
+    elif commit.paths:
+        named = _tracked_changes(norm, folder, commit.paths)
+    else:
+        named = []
+    if named is None:
+        return None
+    if commit.paths and not commit.all and not commit.include:
+        return core.combine(commit, named, [])
+    staged = _name_status(norm, folder, "diff", "--cached", "--name-status", "--no-renames", "-z")
+    return None if staged is None else core.combine(commit, named, staged)
 
 
 def _taken(ctx, folder, commit):
-    """[(status, repo path, source)] the commit would take: git's staged list always (whatever the command names),
-    and the files a `--` or `-a` form takes from the working tree. `source` is `index` (the staged blob) or `work`
-    (the working-tree file). None when git cannot tell."""
-    named = _tracked_changes(ctx, folder, commit.paths) if commit.paths else []
-    if commit.all and not commit.paths:
-        named = _tracked_changes(ctx, folder)
-    staged = _name_status(ctx, folder, "diff", "--cached", "--name-status", "--no-renames", "-z")
-    if named is None or staged is None:
-        return None
-    seen = {rel for _status, rel in named}
-    return ([(status, rel, "work") for status, rel in named]
-            + [(status, rel, "index") for status, rel in staged if rel not in seen])
-
-
-def _always(ctx, profile, row, rel) -> bool:
-    """The files no rule of the card's Paths or of ownership applies to: the card's own folder, the register, the
-    ledger folder, and the profile's `paths.exempt` (the edit gate always allows the last, too)."""
-    exempt = profile.get("paths", {}).get("exempt") if isinstance(profile.get("paths"), dict) else None
-    entries = [ctx.norm(str(register.path(ctx.root, profile))), f"{profiles.bundle_root(profile)}/ledger"]
-    if row and row.get("folder"):
-        entries.append(row["folder"].strip().strip("`"))
-    entries += [e for e in (exempt if isinstance(exempt, list) else []) if isinstance(e, str) and e]
-    return any(helpers.matches(rel, e) for e in entries if e)
-
-
-def _way_out(commit, rels: list) -> str:
-    if commit.paths and not commit.include:
-        return "leave them out of the paths after `--`"
-    if commit.all and not commit.paths:
-        return "commit without `-a` and name your own files after `--`"
-    return f"unstage them with `git restore --staged {' '.join(dict.fromkeys(rels))}`"
-
-
-def _commit(ctx, profile, commit):
-    if commit.folder_unreadable:
-        return gate.refuse("commit-unreadable", "this commit runs in a folder the gate cannot read (a `cd` or `-C` to "
-                                                "a variable or an unreadable target), so its files cannot be "
-                                                "checked; `cd` to a literal folder, or commit from the root")
-    cwd = commit.cwd
-    if cwd:
-        rel = ctx.norm(cwd)
-        if rel is not None:
-            cwd = None if rel == "." else rel
-    folder = (ctx.root / cwd) if cwd else ctx.root
-    taken = _taken(ctx, folder, commit)
-    if taken is None:
-        return gate.refuse("commit-unreadable", "the files this commit takes could not be read from git, so it could "
-                                                "not be checked; run it again from the repository")
-    card_id = ctx.records.card()
-    row = None
-    if card_id:
-        problem = register.seal_problem(ctx.root, profile)
-        if problem:
-            return gate.refuse("register-tampered", f"{problem}; no commit is checked until the owner checks it: "
-                                                    f"{register.OWNER_FIX}")
-        row = register.find(register.read(ctx.root, profile), card_id)
-    status = row.get("status") if row else None
-    is_open = status == "open"
-    recorded = cardtool.paths_set(row.get("paths", "")) if is_open else frozenset()
-    files = [rel for _status, rel, _source in taken if not _always(ctx, profile, row, rel)]
-    outside = [rel for rel in files if not is_open or (recorded and not any(helpers.matches(rel, e) for e in recorded))]
-    sources = {rel: source for _status, rel, source in taken}
-    named_out = [rel for rel in outside if sources.get(rel) == "work"]
-    staged_out = [rel for rel in outside if sources.get(rel) == "index"]
-    way = "; and ".join(w for w in (_way_out(commit, named_out) if named_out else "",
-                                    f"unstage {_list(staged_out)} with `git restore --staged "
-                                    f"{' '.join(dict.fromkeys(staged_out))}`" if staged_out else "") if w)
-    if outside:
-        if not is_open:
-            held = f"{card_id} is {status}" if row else "no card is taken"
-            return gate.refuse("file-not-in-card", f"{_list(outside)} cannot be committed: this session holds no open "
-                                                   f"card ({held}); commit only the card's own files, or take a card "
-                                                   f"the owner has opened (`{CLI} card take <id>`)")
-        shown = "; ".join(sorted(recorded))
-        return gate.refuse("file-not-in-card", f"{_list(outside)} {'is' if len(set(outside)) == 1 else 'are'} not in "
-                                               f"the Paths of {card_id} ({shown}); {way}, or "
-                                               f"add them to the card and ask the owner to `card open {card_id}` "
-                                               f"again, or write a new card")
-    verdict = _content(ctx, profile, commit, taken)
-    if verdict is not None:
-        return verdict
-    verdict = _rules(ctx, profile, commit, taken)
-    if verdict is not None:
-        return verdict
-    return _message(profile, commit, card_id if is_open else None)
-
-
-def _rules(ctx, profile, commit, taken):
-    """Rule 6 (MW-021, `rule-without-test`): a commit that adds or changes a rule card (`rules.cards`, the id read by
-    `ids.rule_card`) must take its test file (`rules.test_for`) too, new or changed. A test changed without its card,
-    a deleted card and a file with no id in its name are not refused. Off until both `rules` keys are set."""
-    if not rules.active(profile):
-        return None
-    taking = {rel for status, rel, _source in taken if status != "D"}
-    lacking = []
-    for rel in sorted(taking):
-        ident = rules.is_card(profile, rel)
-        if ident and rules.test_path(profile, ident) not in taking:
-            lacking.append((rel, rules.test_path(profile, ident)))
-    if not lacking:
-        return None
-    detail = "; ".join(f"{card} needs {test} ({'it is not staged' if (ctx.root / test).is_file() else 'it does not exist'})"
-                       for card, test in lacking[:SHOWN])
-    detail += f"; and {len(lacking) - SHOWN} more" if len(lacking) > SHOWN else ""
-    tests = " ".join(dict.fromkeys(test for _card, test in lacking))
-    where = " and name it after `--`" if commit.paths and not commit.include else ""
-    return gate.refuse("rule-without-test", f"a rule card goes in with its test: {detail}. Write the test (red "
-                                            f"first) and stage it with `git add {tests}`{where}, or leave the card out: "
-                                            f"{_way_out(commit, [card for card, _test in lacking])}")
-
-
-def _message(profile, commit, card_id):
-    """Rule 5: the commit message names the open card's id (the `ids.card_prefix` form, a whole id). On by default;
-    `gates.commit_files.message_card.on: false` turns it off. With no open card there is no id to name. A message the
-    gate cannot read fails closed."""
-    if not card_id or not profiles.gate_on(profile, "commit_files.message_card", True):
-        return None
-    if commit.message is None:
-        return gate.refuse("commit-unreadable", f"the gate cannot read this commit's message (no `-m`, a message file "
-                                                f"that does not exist, a reused message with `-C`, `--amend` without "
-                                                f"`-m`), so it cannot check that it names {card_id}; give it with "
-                                                f"-m \"{card_id} <what changed>\" (several -m for paragraphs), or "
-                                                f"-F - with a here-document, or -F with a message file that exists")
-    own = re.findall(rf"(?<![A-Za-z0-9_-]){re.escape(card_id)}(?![0-9A-Za-z_])", commit.message)
-    if own:  # MW-033: the open card's own id, literally, whatever `ids.card_prefix` is now
-        return None
-    try:
-        found = cardtool.id_pattern(profile).findall(commit.message)
-    except cardtool.CardError:  # no `ids.card_prefix`: only the open card's own id is a whole id
-        found = []
-    named = ", ".join(dict.fromkeys(found)) or "no card"
-    return gate.refuse("commit-message-card", f"the message names {named}, not the open card {card_id}; put the card "
-                                              f"id anywhere in the first line, for example -m \"{card_id} <what "
-                                              f"changed>\"")
-
-
-def _name_hit(name: str, pattern: str) -> bool:
-    return helpers.glob_re(helpers._fold(pattern)).fullmatch(helpers._fold(name)) is not None
-
-
-def _first(rel: str, patterns: list):
-    """The first junk or data pattern the repo path matches, or None. A name or glob matches any part of the path,
-    at any depth; a trailing `/` names folders only; a pattern with a `/` inside is matched against the whole path."""
-    for pattern in patterns:
-        p = pattern.replace("\\", "/").strip()
-        folder = p.endswith("/")
-        p = p.strip("/")
-        if not p:
-            continue
-        if "/" in p:
-            hit = helpers.matches(rel, p)
-        else:
-            parts = rel.split("/")
-            hit = any(_name_hit(part, p) for part in (parts[:-1] if folder else parts))
-        if hit:
-            return pattern
-    return None
+    """`taken` for the file gate: paths relative to the task root."""
+    return taken(ctx.norm, folder, commit)
 
 
 def _ignored(ctx, rels: list):
@@ -357,47 +429,44 @@ def _sizes(ctx, rows: list):
     return sizes
 
 
-def _content(ctx, profile, commit, taken):
-    """Rules 3 and 4: no junk, no force-added ignored file, no data file, nothing over the size limit. A deletion is
-    never refused: removing the mess is the way out."""
-    cfg = settings(profile)
-    live = [(status, rel, source) for status, rel, source in taken if status != "D"]
-    rels = [rel for _status, rel, _source in live]
-    junk = {rel: p for rel in rels if (p := _first(rel, cfg["junk"]))}
-    if junk:
-        which = ", ".join(sorted(set(junk.values())))
-        return gate.refuse("junk-file-staged", f"{_list(list(junk))} {'is' if len(junk) == 1 else 'are'} junk "
-                                               f"(`commit.junk`: {which}); {_way_out(commit, list(junk))}; a file "
-                                               f"that keeps appearing belongs in the ignore file")
-    added = [rel for status, rel, _source in live if status == "A"]
-    ignored = _ignored(ctx, added)
-    if ignored is None:
-        return gate.refuse("commit-unreadable", "git's ignore rules could not be read, so the commit could not be "
-                                                "checked; run it again from the repository")
-    found = [rel for rel in added if rel in ignored]
-    if found:
-        return gate.refuse("ignored-file-staged", f"{_list(found)} {'is' if len(found) == 1 else 'are'} ignored by "
-                                                  f"git and was added with `git add -f`: the ignore file is never "
-                                                  f"overridden by a commit; {_way_out(commit, found)}, or ask the "
-                                                  f"owner to change the ignore file")
-    data = {rel: p for rel in rels if (p := _first(rel, cfg["data_patterns"]))}
-    if data:
-        which = ", ".join(sorted(set(data.values())))
-        return gate.refuse("data-file-staged", f"{_list(list(data))} {'is a data file' if len(data) == 1 else 'are data files'} "
-                                               f"(`commit.data_patterns`: {which}); data never goes into the "
-                                               f"repository: {_way_out(commit, list(data))}, and keep the data "
-                                               f"outside the repository (the owner changes `commit.data_patterns` "
-                                               f"if a file type is listed wrongly)")
-    sizes = _sizes(ctx, [(rel, source) for _status, rel, source in live])
-    if sizes is None:
-        return gate.refuse("commit-unreadable", "the file sizes could not be read from git, so the commit could not "
-                                                "be checked; run it again from the repository")
-    limit = cfg["max_file_kb"]
-    big = [(rel, size / 1024) for rel, size in sizes.items() if size > limit * 1024]
-    if big:
-        shown = "; ".join(f"{rel} is {kb:.0f} KB" for rel, kb in big[:SHOWN]) + (
-            f"; and {len(big) - SHOWN} more" if len(big) > SHOWN else "")
-        return gate.refuse("file-too-large", f"{shown}, over `commit.max_file_kb` ({limit:g} KB); "
-                                             f"{_way_out(commit, [rel for rel, _kb in big])} (the owner changes "
-                                             f"`commit.max_file_kb` if the file belongs in the repository)")
-    return None
+# ---- the start block and `mkway check` ----------------------------------------------------------------------------------------
+
+def _exempt(norm, root, profile, row, rel) -> bool:
+    entries = list(free_entries(profile, norm(str(register.path(root, profile)))))
+    if row and row.get("folder"):
+        entries.append(row["folder"].strip().strip("`"))
+    return any(helpers.matches(rel, e) for e in entries if e)
+
+
+def staged_outside(root, profile, row=None):
+    """MW-043: the repo paths staged in the root's index that lie outside a card's Paths, for the start block and
+    `mkway check`; a line there, never a refusal. `row` is a register row: the files outside that card's Paths (a
+    card that is not open leaves every file outside). With no row: the files outside the Paths of every open card
+    (no open card leaves every file outside; open cards with no Paths restrict nothing). The files no card rule
+    applies to are not counted. None when git or the register cannot be read."""
+    root = Path(root)
+    prefix = helpers.top_prefix(root)
+
+    def norm(path):
+        return helpers.norm(path, root, top_prefix=prefix)
+
+    try:
+        proc = runner.git(root, "diff", "--cached", "--name-status", "--no-renames", "-z")
+        if proc.returncode != 0:
+            return None
+        parts = proc.stdout.split("\0")
+        staged = [rel for rel in (norm(parts[i + 1]) for i in range(0, len(parts) - 1, 2)) if rel is not None]
+        rows = [r for r in register.read(root, profile)] if row is None else [row]
+    except (OSError, ValueError, register.RegisterError, runner.Refused, runner.SubprocessError):
+        return None
+    cards = [r for r in rows if r.get("status") == "open"]
+    recorded = frozenset().union(*(cardtool.paths_set(r.get("paths", "")) for r in cards)) if cards else frozenset()
+    out = []
+    for rel in dict.fromkeys(staged):
+        if any(_exempt(norm, root, profile, r, rel) for r in (cards or [row])):
+            continue
+        if cards and not recorded:
+            continue
+        if not any(helpers.matches(rel, e) for e in recorded):
+            out.append(rel)
+    return out

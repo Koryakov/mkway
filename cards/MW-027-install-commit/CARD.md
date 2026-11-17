@@ -39,7 +39,7 @@ install"`, or runs them with `--commit` in the owner's terminal. The README «Us
 | E8 | the copy under autocrlf | converted | `engine/** -text` | tests/test_mw027_install_commit.py::test_the_engine_copy_is_never_converted_by_git |
 | E9 | an earlier `.gitignore` with `engine/` | silent | one report line, nothing removed | tests/test_mw027_install_commit.py::test_an_older_ignore_line_for_the_engine_copy_is_reported |
 | E10 | README «Use in a task» | settings.local.json called git-ignored | five lines, no such claim | tests/test_mw027_install_commit.py::test_readme_use_in_a_task_has_five_lines_and_no_ignored_settings_claim |
-| E11 | register, changelog, version | no word | register row, `## 0.2.7` on top, `VERSION` 0.2.7 | tests/test_mw027_install_commit.py::test_register_changelog_and_version_name_the_card |
+| E11 | register, changelog, version | no word | register row, a line under the release that names the card, VERSION: see VERSION | tests/test_mw027_install_commit.py::test_register_changelog_and_version_name_the_card |
 
 ## 8. Log
 
@@ -53,3 +53,4 @@ install"`, or runs them with `--commit` in the owner's terminal. The README «Us
 | 2026-11-11 | whole suite, `python -m pytest`, term scan included | the commit that carries this line | 875 passed in 436 s; no term-scan exception added |
 | 2026-11-11 | ported onto master 4fd59c6 (MW-030 and MW-031 merged): t27's lines applied to the files master also changed (register, changelog, `engine/install.py`), the rest copied; the live install test of MW-030 reads the hooks from `.claude/settings.json` and gains E9 and E10 (status offers no run-time file; a second worktree of the committed install starts with no install); MW-030 row E8 and MW-031 row E7 changed with a Log line each (a newer release is on top, VERSION 0.2.7) | the commit that carries this line | whole suite, `python -m pytest`, term scan included: 893 passed in 467 s; no term-scan exception added |
 | 2026-11-11 | ported again onto master f77c7da (MW-032 merged): t27b's lines applied to `engine/install.py` keeping MW-032's swap by rename and its read-only-aware remover, to the register, the changelog (`## 0.2.7` on top, MW-032's line kept under `## 0.2.6`) and the live test (MW-032's reinstall step kept, E9 and E10 added); MW-032 row E8 changed with a Log line (VERSION 0.2.7) | the commit that carries this line | whole suite, `python -m pytest`, term scan included: 901 passed in 509 s; no term-scan exception added |
+| 2026-11-12 | MW-040: row E11 named a release number or an old VERSION | the commit that carries this line | the row says «see VERSION» and «the release that names the card»; its test reads the VERSION file and finds the card's changelog line (`tests/_docs.py`), no release number is pinned |

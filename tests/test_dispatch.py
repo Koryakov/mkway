@@ -204,8 +204,9 @@ def _log_case_holds(event, case, out, rows):
     """A failed log write never blocks and never unblocks (fix checks N1, blind, 3)."""
     if case in ("log-alone", "log-warn"):
         assert _nothing_blocked(out), case
-        if case == "log-warn":
-            assert "fixture gate: always warns" in out["hookSpecificOutput"]["additionalContext"], case
+        if case == "log-warn":  # MW-075: on Stop the warn is a systemMessage, never additionalContext
+            shown = out["systemMessage"] if event == "Stop" else out["hookSpecificOutput"]["additionalContext"]
+            assert "fixture gate: always warns" in shown, case
     else:
         assert _refusal_stands(event, out), case
     if case == "log-timing":  # only the broken row is lost

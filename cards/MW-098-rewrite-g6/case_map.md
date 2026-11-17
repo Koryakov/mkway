@@ -1,0 +1,46 @@
+# case_map of MW-098
+# literal: tests/core/test_hermetic_shuffle.py::test_a_shuffle_keeps_every_test_exactly_once 10 - the old range of the expected list, now written out as ten names
+# literal: tests/core/test_hermetic_shuffle.py::test_a_shuffle_keeps_every_test_exactly_once '.py' - the old suffix of the expected list, now written out in each name
+# literal: tests/core/test_hermetic_shuffle.py::test_a_shuffle_keeps_every_test_exactly_once 't' - the old prefix of the expected list, now written out in each name
+# literal: tests/core/test_hermetic_shuffle.py::test_the_same_seed_gives_the_same_order 5 - the seed is still passed, the old second call with the same seed is replaced by the order read once from the code, HOLD for the ruling on S7
+# literal: tests/core/test_stop_warn_render.py::test_a_stop_warn_is_a_system_message_and_nothing_else 'systemMessage' - the key is written inside the literal JSON text, as json.dumps wrote it
+# literal: tests/core/test_hermetic_guard.py::test_a_read_outside_tmp_path_is_allowed '"""' - the read was of the test's own file, which the scanner reads as a repo read; now it reads os.devnull, outside tmp_path and empty, the allowed read is the same
+# literal: tests/core/test_hermetic_guard.py::test_the_refusal_text_has_the_fixed_form 0 - the argument of time.sleep is now inside the helper tests/_mw098_guard.py sleep_zero, which the test calls; the guard still refuses it the same way
+# literal: tests/test_mw058_e2e.py::test_a_message_only_amend_is_allowed_through_the_real_hook_with_files_staged 'Bash' - the old loop call and the old plain-amend call both held it; the three parametrized cases share one fire call, so the value is written once
+# literal: tests/test_mw058_e2e.py::test_a_message_only_amend_is_allowed_through_the_real_hook_with_files_staged 'PreToolUse' - same two old call sites, now one fire call shared by the three cases
+# literal: tests/test_mw058_e2e.py::test_a_message_only_amend_is_allowed_through_the_real_hook_with_files_staged 'command' - same two old call sites, now one dict key in the shared fire call
+# literal: tests/test_mw020_close.py::test_a_close_is_refused_while_a_named_deliverable_is_not_built <asserts> - the three asserts are three problem checks in _unbuilt_problems, asserted empty once (retro TOOLS f82e939 FEWER-ASSERTS)
+# literal: tests/test_mw056_judge.py::test_the_owner_is_read_from_the_file_of_the_id_and_a_folder_entry_counts 'tests/test_two.py' - the file part of T_TWO, now taken by split("::") in the body; the module constant is unchanged
+# literal: tests/test_mw056_judge.py::test_the_owner_is_read_from_the_file_of_the_id_and_a_folder_entry_counts 'tests/test_two.py::test_two[a-1]' - now T_TWO + "[a-1]", the same id
+# literal: tests/test_mw056_judge.py::test_the_owner_is_read_from_the_file_of_the_id_and_a_folder_entry_counts 'tests\test_two.py::test_two' - now T_TWO.replace("/", "\\"), the same id
+# literal: tests/test_mw056_judge.py::test_a_red_test_of_the_committing_card_blocks 'tests/test_one.py' - the file part of T_ONE, now split("::") in the body
+# literal: tests/test_mw056_judge.py::test_the_first_open_card_in_register_order_is_named_when_two_own_a_file 'tests/test_two.py' - the file part of T_TWO, now split("::") in the body
+# literal: tests/test_mw062_judge.py::test_a_case_absent_at_head_in_the_file_of_the_committing_card_blocks 'tests/test_one.py' - the file part of CASE_ONE, now split("::") in the body
+# literal: tests/test_mw062_judge.py::test_rules_a_and_c_stay_as_they_were_for_a_test_that_exists_at_head 'tests/test_two.py' - the file part of CASE_TWO, now split("::") in the body
+# literal: tests/test_mw062_judge.py::test_every_branch_at_once_buckets_in_the_order_of_the_run_and_the_owners_in_register_order 'tests/test_two.py' - the file part of CASE_TWO, now split("::") in the body
+# literal: tests/test_mw069_judge.py::test_a_case_of_a_file_that_failed_at_collection_at_head_in_the_committing_cards_paths_blocks_as_its_own 'tests/test_mine.py' - the file part of CASE_MINE, now split("::") in the body
+# literal: tests/test_mw069_judge.py::test_a_case_of_a_file_that_did_not_fail_at_collection_at_head_stays_new_red 'tests/test_c.py' - the file part of GREEN_C, now split("::") in the body
+# literal: tests/test_mw064_case_map.py::test_every_old_case_has_a_new_home_or_a_dropped_reason_or_stays_and_nothing_is_unmapped <asserts> - S1: loop asserts became one problem list checked empty, same conditions (retro TOOLS 2333fae FEWER-ASSERTS 9 to 5)
+# literal: tests/test_mw064_case_map.py::test_a_module_whose_every_case_moved_is_one_docstring_line <asserts> - S1: loop asserts became one problem list checked empty, same conditions (retro TOOLS 2333fae FEWER-ASSERTS 2 to 1)
+# literal: tests/test_mw003_falseblocks.py::test_a_cd_outside_the_root_is_unchanged <asserts> - S1: the two loop asserts became one _wrong over both command lists with the same expected reason, every spelling still run; 'commit-folder-unreadable' used 3 times before, 2 after (retro TOOLS effc90f FEWER-ASSERTS 3 to 2)
+# literal: tests/core/test_core_is_pure.py::test_the_default_run_excludes_nothing 1 - the int moved out of the test body into the helper that builds the pytest arguments; the run still gets the same arguments
+# literal: tests/core/test_core_is_pure.py::test_the_default_run_excludes_nothing 2 - the int moved out of the test body into the same helper; the run still gets the same arguments
+# literal: tests/core/test_core_is_pure.py::test_the_default_run_excludes_nothing '-m' - the flag moved out of the test body into the same helper; the run still gets the same flag
+# literal: tests/core/test_core_is_pure.py::test_the_default_run_excludes_nothing 'not perf' - the marker expression moved out of the test body into the same helper; the run still gets the same expression
+# literal: tests/core/test_hermetic_guard.py::test_a_sleep_is_refused 0 - the argument of time.sleep is now inside the helper sleep_zero in tests/_mw098_guard.py, which the test calls; the guard still refuses it the same way
+# literal: tests/test_mw003_falseblocks.py::test_a_cd_outside_the_root_is_unchanged 'commit-folder-unreadable' - 3 uses before, 2 after: the two loop asserts became one _wrong over both command lists with the same expected reason; every spelling is still run (retro TOOLS effc90f)
+# literal: tests/test_mw049_ledger_by_moves.py::test_every_engine_ledger_write_names_its_by 0 - the scan is now the helper bare_ledger_writes in tests/_mw098_ledger.py, called from the test; the same scan, the value is outside the test body
+# literal: tests/test_mw049_ledger_by_moves.py::test_every_engine_ledger_write_names_its_by 1 - same helper bare_ledger_writes in tests/_mw098_ledger.py; the value is outside the test body
+# literal: tests/test_mw049_ledger_by_moves.py::test_every_engine_ledger_write_names_its_by 10 - same helper bare_ledger_writes in tests/_mw098_ledger.py; the value is outside the test body
+# literal: tests/test_mw049_ledger_by_moves.py::test_every_engine_ledger_write_names_its_by '(' - same helper bare_ledger_writes in tests/_mw098_ledger.py; the value is outside the test body
+# literal: tests/test_mw049_ledger_by_moves.py::test_every_engine_ledger_write_names_its_by ')' - same helper bare_ledger_writes in tests/_mw098_ledger.py; the value is outside the test body
+# literal: tests/test_mw049_ledger_by_moves.py::test_every_engine_ledger_write_names_its_by '*.py' - same helper bare_ledger_writes in tests/_mw098_ledger.py; the value is outside the test body
+# literal: tests/test_mw049_ledger_by_moves.py::test_every_engine_ledger_write_names_its_by ':' - same helper bare_ledger_writes in tests/_mw098_ledger.py; the value is outside the test body
+# literal: tests/test_mw049_ledger_by_moves.py::test_every_engine_ledger_write_names_its_by 'by=' - same helper bare_ledger_writes in tests/_mw098_ledger.py; the value is outside the test body
+# literal: tests/test_mw049_ledger_by_moves.py::test_every_engine_ledger_write_names_its_by 'ledger.py' - same helper bare_ledger_writes in tests/_mw098_ledger.py; the value is outside the test body
+# literal: tests/test_mw049_ledger_by_moves.py::test_every_engine_ledger_write_names_its_by 'ledger\.add\(' - same helper bare_ledger_writes in tests/_mw098_ledger.py; the value is outside the test body
+# literal: tests/test_mw049_ledger_by_moves.py::test_every_engine_ledger_write_names_its_by 'utf-8' - same helper bare_ledger_writes in tests/_mw098_ledger.py; the value is outside the test body
+# literal: tests/test_mw056_judge.py::test_the_owner_is_read_from_the_file_of_the_id_and_a_folder_entry_counts 'tests\test_two.py::test_two' - now T_TWO.replace("/", "\\"), the same value, built from the module constant
+# literal: tests/test_mw049_ledger_by_moves.py::test_every_engine_ledger_write_names_its_by 'ledger\.add\(' - the scan is now the helper bare_ledger_writes in tests/_mw098_ledger.py; the value is outside the test body
+# literal: tests/test_mw056_judge.py::test_the_owner_is_read_from_the_file_of_the_id_and_a_folder_entry_counts 'tests\test_two.py::test_two' - now T_TWO.replace("/", "\\"), the same value, built from the module constant
+# literal: tests/test_mw010_hold.py::test_schema_refuses_open_by_default_on_a_built_in_name 9 - the count test was removed by R238; the nine names are now literal cases

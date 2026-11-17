@@ -109,6 +109,10 @@
             "type": "number",
             "description": "seconds a gate may take; the dispatcher passes it in ctx and logs over-budget"
           },
+          "watch_until": {
+            "type": "string",
+            "description": "MW-112: the end date (YYYY-MM-DD) of the owner's watch of this form gate; written by `mkway gate watch`, 7 days from the day when no --until is given; the start line says when the watch ends and, after the date, enforce or remove"
+          },
           "min_calls": {
             "type": "integer",
             "exclusiveMinimum": 0,
@@ -118,6 +122,14 @@
             "type": "number",
             "exclusiveMinimum": 0,
             "description": "read under gates.trip only (MW-012): the refusal share above which a form gate trips into watch; default 0.34"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "trip",
+              "watch"
+            ],
+            "description": "read under gates.ping only (MW-076): trip (default) refuses a builder's Stop once; watch only warns and writes the record row"
           }
         },
         "additionalProperties": {
@@ -303,6 +315,19 @@
             "orderer"
           ],
           "description": "who closes a card for a session: owner-only (default), or orderer (MW-011: the session that ordered the card, when it is not the holder and the card's tests pass); MW-008 adds other-session"
+        },
+        "stale_hours": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "hours a card holder may stay unseen (its last row in sessions.jsonl) before a `card take` releases its card; default 4 (MW-045)"
+        },
+        "verdicts": {
+          "type": "string",
+          "enum": [
+            "required",
+            "off"
+          ],
+          "description": "required (default): `card close` needs a good verdict row, by a reader who did not write the test, for every test node an Acceptance row names (tests/verdicts/<card>.md); off skips the check (MW-068)"
         }
       }
     },
@@ -341,6 +366,15 @@
             "minLength": 1
           },
           "description": "paths the subtask gate always allows; default none"
+        },
+        "outside_writable": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(/|[A-Za-z]:[/\\\\]|<home>/|<temp>/)"
+          },
+          "description": "folders outside the session's root that every session may write, added to the engine's own list (the harness memory, plans and temp folders); each is an absolute path or starts with `<home>/` or `<temp>/`, `*` is one folder name and `**` any depth; the settings files and the hooks folders never match; the owner adds, never removes a shipped folder (MW-103, R255b; R274 replaces `leads.outside_writable`, which is read as an alias until the upgrade renames it)"
         }
       }
     },
@@ -423,6 +457,32 @@
           "type": "number",
           "exclusiveMinimum": 0,
           "description": "minutes an order may stay unacked before a Stop gets a reminder line, never a block; default 30 (MW-018)"
+        },
+        "session_id_watch_until": {
+          "type": "string",
+          "description": "an ISO date `YYYY-MM-DD`: after it a shell call whose launcher variable is unset is refused `session-id-mismatch`; empty or absent means no expiry and an unset variable is a warn `session-id-unset` (MW-110)"
+        }
+      }
+    },
+    "wake": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "the inbox waiter, a Stop handler that wakes an idle lead or builder when a new row reaches its inbox (MW-078); every key has a default, so the object may be absent or empty",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["on", "off"],
+          "description": "on: the waiter is installed and arms; off: it is left out and exits at once; default on (MW-078)"
+        },
+        "deadline_seconds": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "seconds a waiter waits before its heartbeat wakes the session once and the next Stop re-arms it; the hook timeout is this plus 60; default 14400 (MW-078)"
+        },
+        "poll_seconds": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "seconds between two looks at the inbox and at the pid file; default 5 (MW-078)"
         }
       }
     },
@@ -563,10 +623,69 @@
       "additionalProperties": false,
       "description": "the commit gate's test run (MW-005); every key has a default, so the object may be absent or empty",
       "properties": {
+        "shape": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "the shape check of the tests a commit adds or changes (MW-073)",
+          "properties": {
+            "mode": {
+              "enum": ["trip", "watch"],
+              "description": "trip (default): a test that breaks a shape rule refuses the commit; watch: the gate writes its row and the reason line and allows"
+            }
+          }
+        },
         "command": {
           "type": "string",
           "minLength": 1,
           "description": "the whole command line of the run, roots included, started in the exported staged tree; its first word is the profile's Python; default python -m pytest -q followed by the test_roots"
+        },
+        "hermetic_dirs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "folders whose small tests are hermetic (no process, socket, sleep or write outside tmp_path) and run in a shuffled order; default [\"tests/core\"]; [] means none; the task keeps a copy of the engine's tests/core/conftest.py in each folder (MW-074)"
+        },
+        "red_proof": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "the red proof of the commit gate (MW-072); every key has a default",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": ["trip", "watch"],
+              "description": "trip (default) refuses a commit the red proof refuses; watch writes the record row and the reason line and allows"
+            },
+            "decision_pattern": {
+              "type": "string",
+              "description": "a regular expression: the matches in a commit message are the decisions it names; a card's case_map.md line is honoured only under one that counts (MW-090); empty (default) or not compiling means no decision"
+            }
+          }
+        },
+        "verdict_add": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "the command `mkway verdict add` (MW-080): every key has a default, so the object may be absent or empty",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": ["trip", "watch"],
+              "description": "trip (the default, and the value of a missing key): the command refuses; watch: a refusal other than by-holder, by-committer, by-owner, stale and no-caller is logged as would-refuse and the row is written (MW-080, R196a)"
+            }
+          }
+        }
+      }
+    },
+    "sessions": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "the session record of the launcher (MW-076, R178a); the engine only reads it",
+      "properties": {
+        "file": {
+          "type": "string",
+          "minLength": 1,
+          "description": "the path of mkcl's sessions.json (an absolute path, or relative to the root); read only, to find the SendMessage name of a lead; a missing or damaged file is a silent fall-back; default none"
         }
       }
     },

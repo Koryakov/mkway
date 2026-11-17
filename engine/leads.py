@@ -27,6 +27,7 @@ from typing import Optional
 import cardtool
 import helpers
 import logs
+import owners
 import profiles
 import records
 import register
@@ -36,6 +37,7 @@ INBOX = "inbox"
 ROLE = "lead"
 ENGINE = "engine"  # the `from` of a notice the engine writes
 NOTICE = "notice"
+WRITES = "inbox-writes.jsonl"  # MW-076: the engine's record of every inbox write
 ORDER_FILE = "ORDER.md"
 CARD_FILE = "CARD.md"
 ACTIVE = ("open", "waiting", "waiting-owner")  # a card that is being worked: its Appetite runs
@@ -220,15 +222,46 @@ def _when(text) -> Optional[datetime.datetime]:
     return when if when.tzinfo else when.replace(tzinfo=datetime.timezone.utc)
 
 
-def append_notice(state, lead: str, body: str, *, sender: str = ENGINE, now=None) -> dict:
-    """Append one notice row to the lead's inbox; the row is returned."""
-    target = inbox_path(state, lead)
+def write_row(state, row: dict, *, cmd=None, card=None) -> None:
+    """The one writer of an inbox row (a notice, a message): the row goes into the recipient's inbox and one row into the
+    record `<state>/inbox-writes.jsonl` (id, from, to, kind, ts; and, when the row has them, `by`: the session that
+    caused it, as MW-049 names the caller; `cmd` and `card`: the command and the card of an engine notice, the fallback
+    of the ping gate when no `by` could be read). The ping gate reads it (MW-076, R187, R189)."""
+    logs.append_jsonl(inbox_path(state, row["to"]), row)
+    record = {k: row.get(k) for k in ("id", "from", "to", "kind", "ts")}
+    record.update({k: v for k, v in (("by", row.get("by")), ("cmd", cmd), ("card", card)) if v})
+    logs.append_jsonl(Path(state) / WRITES, record)
+
+
+def inbox_writes(state) -> list:
+    """The rows of the record of inbox writes, oldest first; a missing or unreadable file reads as empty."""
+    try:
+        lines = (Path(state) / WRITES).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    out = []
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict):
+            out.append(row)
+    return out
+
+
+def append_notice(state, lead: str, body: str, *, sender: str = ENGINE, now=None, by=None, cmd=None, card=None) -> dict:
+    """Append one notice row to the lead's inbox; the row is returned. `by`: the session whose command caused the notice
+    (a field of the row only when given); `cmd` and `card`: see `write_row`."""
+    inbox_path(state, lead)  # a lead that has no inbox path is refused here, before anything is written
     moment = now or logs.now()
     moment = moment if moment.tzinfo else moment.replace(tzinfo=datetime.timezone.utc)
     row = {"id": f"n-{moment.strftime('%Y%m%d%H%M%S')}-{secrets.token_hex(3)}", "from": sender, "to": lead,
            "kind": NOTICE, "reply_to": None, "ts": moment.isoformat(timespec="milliseconds"), "ack_ts": None,
            "body": body}  # MW-018: `reply_to` joins the row, so a message and a notice have one shape
-    logs.append_jsonl(target, row)
+    if by:
+        row["by"] = by
+    write_row(state, row, cmd=cmd, card=card)
     return row
 
 
@@ -313,12 +346,15 @@ def notify_all(state, body: str) -> list:
     return [append_notice(state, lead, body) for lead in lead_ids(state)]
 
 
-def notify_orderer(root, profile, card_id: str, body: str) -> list:
-    """A notice to the card's orderer, when that is a registered lead; nothing otherwise."""
+def notify_orderer(root, profile, card_id: str, body: str, *, by=None, cmd=None) -> list:
+    """A notice to the card's orderer, when that is a registered lead; nothing otherwise. `by`: the session that caused it
+    (MW-076); `cmd` (such as `card set`) with the card id is the fallback when `by` is not known."""
     state = profiles.shared_state_dir(root, profile)
     row = register.find(register.read(root, profile), card_id)
     ordered = (row.get(register.ORDERED) or register.OWNER) if row else None
-    return [append_notice(state, ordered, body)] if ordered and ordered in lead_ids(state) else []
+    if ordered and ordered in lead_ids(state):
+        return [append_notice(state, ordered, body, by=by, cmd=cmd, card=card_id)]
+    return []
 
 
 # --- the Appetite of a card ------------------------------------------------------------------------------------------
@@ -480,13 +516,17 @@ def write_order(folder, card_id: str) -> Optional[Path]:
 # --- what a lead may write -----------------------------------------------------------------------------------------------
 
 def writable(root, profile, session, rel) -> bool:
-    """True when `rel` (a repo path) is one a registered lead may write: `<card folder>/ORDER.md` of a card it
-    ordered, `<card folder>/CARD.md` of a card it ordered while the card is `proposed` (MW-028: the lead authors its
-    own card before the owner opens it; the sealed register's status decides), or inside the asks folder. Whether the
-    session is a lead is the caller's check."""
+    """True when `rel` (a repo path) is one a registered lead may write, read from the owner table (card MW-107): a kind
+    whose owner is the orderer and that a session may write (`owners.Kind.edit`). The asks and the quote files: always.
+    `<card folder>/ORDER*.md` (the order and its fix-round files) of a card it ordered, and `<card folder>/CARD.md` of a
+    card it ordered while the card is `proposed` (MW-028: the lead authors its own card before the owner opens it; the
+    sealed register's status decides). Whether the session is a lead is the caller's check."""
     if not isinstance(rel, str):
         return False
-    if helpers.matches(rel, profiles.owner_ask(profile)["dir"]):
+    kind = owners.kind_of(rel, profile)
+    if kind is None or kind.role != owners.ORDERER or not kind.edit:
+        return False
+    if kind.name in ("asks", "quote-file"):
         return True
     try:
         rows = register.read(root, profile)
@@ -498,9 +538,8 @@ def writable(root, profile, session, rel) -> bool:
         folder = cardtool.norm_entry(row.get("folder", ""))
         if not folder:
             continue
-        if helpers.matches(rel, f"{folder}/{ORDER_FILE}"):
+        if kind.name == "order-file" and helpers.matches(rel, f"{folder}/ORDER*.md"):
             return True
-        if row.get("status") == "proposed" and helpers.matches(rel, f"{folder}/{CARD_FILE}") \
-                and not register.seal_problem(root, profile):
+        if kind.name == "card-file" and row.get("status") == "proposed" and helpers.matches(rel, f"{folder}/{CARD_FILE}")                 and not register.seal_problem(root, profile):
             return True
     return False

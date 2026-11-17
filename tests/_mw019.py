@@ -101,7 +101,7 @@ def write_check(root, rel, text=None, *, doc_sha=None, session="s1", when=180, r
     return path
 
 
-def add_agent(root, *, session="s1", agent_type="critic", agent_id="a1", started=60, ended=120, start_row=True):
+def add_agent(root, *, session="s1", agent_type="critic", agent_id="a1", started=60, ended=120, start_row=True, guard=""):
     """The rows the two agent hooks write (a start row, then an end row that carries the start time)."""
     state = state_dir(root)
     if start_row:
@@ -111,6 +111,9 @@ def add_agent(root, *, session="s1", agent_type="critic", agent_id="a1", started
                           "started": iso(started) if start_row else agents.NE, "ended": iso(ended),
                           "elapsed_seconds": ended - started if start_row else agents.NE, "result": "no findings",
                           "result_source": "payload"})
+    if guard:  # MW116-D1: the record rows of a guarded reader run for the card `guard` (setup only)
+        from _mw116 import guarded
+        guarded(root, session, agent_id, guard)
 
 
 def valid_file(root, name="a.md", *, text=DOC_TEXT, agent="default", doc_when=0, check_when=180, session="s1",

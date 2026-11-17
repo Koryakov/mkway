@@ -71,7 +71,7 @@ def _set_tests(root, card_id, cells):
 
 
 def _task(tmp_path, approver="orderer", **over):
-    cards = dict(over.pop("cards", {}))
+    cards = {"verdicts": "off", **dict(over.pop("cards", {}))}  # MW-068: these tests judge the orderer rules, not the verdict check
     if approver:
         cards["approver"] = approver
     if cards:
@@ -288,7 +288,10 @@ def test_the_gate_reads_the_session_id_of_the_hook_input(tmp_path):
     def fire(session, **extra):
         payload = {"session_id": session, "hook_event_name": "PreToolUse", "tool_name": "Bash", "cwd": str(root),
                    "tool_input": {"command": "python mkway/engine/mkway.py card close CARD-001"}, **extra}
-        return dispatch.run("PreToolUse", "shell", json.dumps(payload), env={"CLAUDE_PROJECT_DIR": str(root)})
+        # MW110-D4: a launched session has the launcher's variable equal to the hook's own id (MW-110), so the first
+        # shell call carries no `session-id-unset` line; every assert below is unchanged
+        env = {"CLAUDE_PROJECT_DIR": str(root), "MKWAY_SESSION_ID": session}
+        return dispatch.run("PreToolUse", "shell", json.dumps(payload), env=env)
 
     denied = fire(HOLD, agent_id="a-1", agent_type="worker")
     assert "close-not-orderer" in denied.stdout and "deny" in denied.stdout

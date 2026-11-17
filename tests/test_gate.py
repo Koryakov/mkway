@@ -17,15 +17,17 @@ def _ctx(**over):
 
 
 def test_fixture_gates_prove_the_interface():
-    """E3: a gate is (event, ctx) -> Verdict; the two fixture gates always refuse / always warn with a reason id and a
-    message; ctx carries the profile, root, session id, tool name and input, the once-store and the budget."""
+    """Catches: a gate is (event, ctx) -> Verdict; the two fixture gates always refuse or always warn with a reason id and a message. E3"""
     ctx = _ctx()
     v = fixture_gates.always_refuse("PreToolUse", ctx)
     assert isinstance(v, gate.Verdict)
-    assert (v.kind, v.reason_id) == (gate.REFUSE, "fixture-refuse") and v.message
+    assert (v.kind, v.reason_id) == (gate.REFUSE, "fixture-refuse")
+    assert v.message
     v = fixture_gates.always_warn("PreToolUse", ctx)
-    assert (v.kind, v.reason_id) == (gate.WARN, "fixture-warn") and v.message
+    assert (v.kind, v.reason_id) == (gate.WARN, "fixture-warn")
+    assert v.message
     assert gate.allow().kind == gate.ALLOW
+    # ctx carries the profile, root, session id, tool name and input, the once-store and the budget.
     assert {f.name for f in dataclasses.fields(gate.Context)} == {
         "profile", "root", "session_id", "event", "gate", "tool_name", "tool_input", "budget_seconds", "once",
         # changed by MW-003 (deliverables 1 and 2): the shared helpers, the records and the PostToolUse response
@@ -37,7 +39,7 @@ def test_fixture_gates_prove_the_interface():
 
 
 def test_verdict_rejects_bad_values():
-    """E3: an unknown kind, or a refuse / warn without a reason id or a message, is not a Verdict."""
+    """Catches: an unknown kind, or a refuse or warn without a reason id or a message, is accepted as a Verdict. E3"""
     with pytest.raises(ValueError):
         gate.Verdict("block", "r", "m")
     with pytest.raises(ValueError):

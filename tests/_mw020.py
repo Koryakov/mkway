@@ -22,6 +22,7 @@ def make_root(tmp_path, *, deliverables="default", name="dtask", **over):
         deliverables = {"paths": PATHS, "require_base": BASE_PATHS}
     if deliverables is not None:
         over["deliverables"] = deliverables
+    over["cards"] = {"verdicts": "off", **over.get("cards", {})}  # MW-068: the deliverable tests judge no verdict check
     root = make_task(tmp_path, name=name, **over)
     save(root, "src/a.py", "x = 1\n")
     return root

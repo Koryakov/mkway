@@ -4,3 +4,6 @@ __pycache__/
 .pytest_tmp/
 # Machine layer: generated registration and per-machine values never ship.
 .claude/settings.local.json
+.coverage
+scratch_*.txt
+scratch_rows.txt

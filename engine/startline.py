@@ -5,7 +5,7 @@ gates that are on, the gates that are off and the gates not loaded; vcs; the pro
 files in `locks/`; the gate-error and dispatcher-error counts; the user layer, for information only.
 
 `drift(...)` compares (1) the copy's hash with the lock, (2) the live owned hook entries with a fresh generation as
-whole entries (event, matcher, command, timeout, onFailure), and `<state.dir>/machine.json` with the interpreter
+whole entries (event, matcher, command, timeout, onFailure, asyncRewake), and `<state.dir>/machine.json` with the interpreter
 of those entries (it must run and report Python 3.9 or later: `drift-machine`), (3) the profile with the schema. The start line turns any
 difference into one warning line naming the fix. It only warns here; the MW-003 commit gate will call it too.
 """
@@ -15,6 +15,7 @@ import json
 from pathlib import Path
 
 import gatemode
+import helpers
 import install
 import paths
 import profiles
@@ -59,7 +60,8 @@ def _machine_python(root: Path, profile):
 
 def _whole(entries) -> list:
     """Whole entries (C27, R13c): event, matcher, the full command, timeout and onFailure."""
-    return sorted((e["event"], e.get("matcher") or "", e["command"], e.get("timeout"), e.get("on_failure") or "")
+    return sorted((e["event"], e.get("matcher") or "", e["command"], e.get("timeout"), e.get("on_failure") or "",
+                   e.get("async_rewake") is True)  # MW-078: a missing or changed asyncRewake is drift
                   for e in entries)
 
 
@@ -131,6 +133,62 @@ def _error_counts(state: Path) -> str:
     return f"errors logged: gate-error {counts['gate-error']}, dispatcher-error {counts['dispatcher-error']}"
 
 
+def _stop_crash_lines(state: Path, manifest: list) -> list:
+    """MW-115 (named limit, K8): one line for each Stop-event gate that has crashed. A Stop hook cannot be wired fail-closed
+    (a crashing hook cannot block, and Claude Code ends the turn after eight blocks in a row), so the dispatcher allowed
+    the reply; the line says so and names the count of `gate-error` rows."""
+    stop_names = {e["name"] for e in manifest if e.get("function") and e.get("event") == "Stop"}
+    counts: dict = {}
+    try:
+        lines = (state / "refusals.jsonl").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict) and row.get("reason_id") == "gate-error" and row.get("gate") in stop_names:
+            counts[row["gate"]] = counts.get(row["gate"], 0) + 1
+    return [f"Stop gate {name} failed {n} times and allowed the reply: a crashing Stop hook cannot block (Claude Code "
+            f"ends the turn after eight blocks in a row); the gate-error rows in the refusal log name the error"
+            for name, n in sorted(counts.items())]
+
+
+def _refusal_failure_lines(state: Path, session) -> list:
+    """MW-128 (R301a 2): one line for this session when the Stop hook could not write a refusal of its into the orderer's inbox
+    (a Stop hook cannot fail closed, so the stop was allowed). The line names the count, the latest error and the way out; it
+    ends when the gate refusal row is delivered. Never raises."""
+    try:
+        failed = gatemode.delivery_failures(state, session) if isinstance(session, str) and session else []
+    except Exception:
+        return []
+    if not failed:
+        return []
+    last = failed[-1]
+    return [f"refusal-delivery-failed: {len(failed)} refusal(s) of this session could not be written to its orderer's inbox "
+            f"(latest: gate refusal row {last.get('refusal') or 'not established'}, {last.get('error') or 'not established'}); "
+            f"the stop was allowed. Tell your orderer yourself: `mkway send` the exact command and the refusal line "
+            f"(the row is in gate_calls.jsonl)"]
+
+
+def _handoff_failure_lines(state: Path, session) -> list:
+    """MW-132 (R338 6): one line for this session when the Stop hook could not write its last message into the orderer's inbox (a
+    Stop hook cannot fail closed, so the stop was allowed). The line names the count, the latest error and the way out; a written
+    notice ends it. Never raises."""
+    try:
+        failed = gatemode.handoff_failures(state, session) if isinstance(session, str) and session else []
+    except Exception:
+        return []
+    if not failed:
+        return []
+    last = failed[-1]
+    return [f"handoff-notice-failed: {len(failed)} turn end(s) of this session could not be written to its orderer's inbox "
+            f"(latest: {last.get('error') or 'not established'} at {last.get('time') or 'not established'}); the stop was allowed. "
+            f"Tell your orderer yourself: `mkway send` your question, your result, or what you wait for "
+            f"(the row is in gate_calls.jsonl)"]
+
+
 def _locks_line(root: Path, profile, bundle: str) -> str:
     """The count of lock files, then each open lock with its end time (lock_notice joins the start line, MW-003)."""
     import locks
@@ -159,6 +217,27 @@ def _locks_line(root: Path, profile, bundle: str) -> str:
 
 
 REFUSAL_RULE = "a refusal is reported, never worked around"  # R15 A9
+ROLE_BUDGET = (("lead", 40), ("builder", 30), ("operator", 30))  # MW-112 (R284): lines per role file the engine ships; engine constants, no profile key
+ROLE_DIR = Path(__file__).resolve().parent / "roles"
+
+
+def _role_lines(root: Path) -> list:
+    """MW-112: one line per shipped role file, `role file: <path>, N/<budget> lines`; it only shows the number and never stops
+    the block (a file that can not be read says so)."""
+    out = []
+    for name, budget in ROLE_BUDGET:
+        path = ROLE_DIR / f"{name}.md"
+        try:
+            shown = path.relative_to(Path(root).resolve()).as_posix()
+        except ValueError:
+            shown = path.as_posix()
+        try:
+            count = sum(1 for x in path.read_text(encoding="utf-8").splitlines() if x.strip())
+        except OSError:
+            out.append(f"role file: {shown}, not established (the file can not be read)")
+            continue
+        out.append(f"role file: {shown}, {count}/{budget} lines")
+    return out
 SIGNAL_MISSING = "session-signal-missing"
 CHANGES = "card changes since the owner's last re-seal"
 
@@ -229,6 +308,27 @@ def _card_lines(root: Path, p, session) -> list:
     else:
         lines.append(f"{CHANGES}: " + ("; ".join(_change_text(c) for c in changes) or "none"))
     return lines
+
+
+def _staged_lines(root: Path, p, session) -> list:
+    """MW-043: `staged outside your card: N` when this session holds an open card and N > 0 files are staged outside
+    its Paths. A line only, never a refusal; a read that fails adds no line: the start block never fails here."""
+    import gate_commit
+    import records
+    import register
+    if p.get("vcs") != "git":
+        return []
+    try:
+        state = profiles.state_dir(root, p)
+        rows = register.read(root, p)
+        mine = records.session_card(state, session, {r["id"] for r in rows if r.get("status") == "closed"})
+        row = register.find(rows, mine) if mine else None
+        if not row or row.get("status") != "open":
+            return []
+        found = gate_commit.staged_outside(root, p, row)
+    except Exception:
+        return []
+    return [f"staged outside your card: {len(found)}"] if found else []
 
 
 def _agent_lines(root: Path, p, session) -> list:
@@ -362,16 +462,18 @@ def render(root: Path, profile_file: Path, profile, errors: list, manifest: list
         shown = Path(profile_file).resolve().relative_to(root.resolve()).as_posix()
     except ValueError:
         shown = Path(profile_file).as_posix()
-    lines = [f"mkway {_version_text(root, bundle, lock)}; profile: {shown}"]
+    # MW-107 (R274 5.8, R274a 11): the root of the session, the install root whether or not it is a git repository
+    lines = [f"mkway {_version_text(root, bundle, lock)}; profile: {shown}",
+             f"root: {helpers.real_root(root)}; every path you write starts here"]
     state = profiles.state_dir(root, p)
     try:  # MW-012: a form gate in watch is marked; the block never fails here
         watched = gatemode.watching_gates(state, manifest)
     except Exception:
         watched = []
     on = [e["name"] + (" (watch)" if e.get("gate", e["name"]) in watched else "")
-          for e in manifest if valid and install._loadable_on(p, e)]
+          for e in manifest if valid and not e.get("waiter") and install._loadable_on(p, e)]  # MW-078: the waiter is no gate
     not_loaded = [e["name"] for e in manifest if e.get("function") and not e.get("reason_ids")]
-    planned = sum(1 for e in manifest if not e.get("function"))
+    planned = sum(1 for e in manifest if not e.get("function") and not e.get("waiter"))
     lines.append(f"gates on: {', '.join(on) or 'none'}; not loaded: "
                  + (", ".join(f"{n} (no reason_ids)" for n in not_loaded) or "none")
                  + f"; {planned} manifest entries without code yet")
@@ -383,9 +485,15 @@ def render(root: Path, profile_file: Path, profile, errors: list, manifest: list
     lines.append(f"gates off: {', '.join(off) or 'none'}")
     for gate in watched:  # MW-012, rule 7: one line per form gate in watch, every session until the owner's `gate on`
         try:
-            lines.append(gatemode.watch_line(root, state, manifest, gate))
+            lines.append(gatemode.watch_line(root, state, manifest, gate, profile=p))
         except Exception:
             lines.append(f"gate {gate}: WATCH (the counts could not be read)")
+    try:  # MW-115: a marker of an install from before the gate became integrity: named once, then removed
+        for gate in gatemode.stale_markers(state, manifest):
+            lines.append(gatemode.stale_line(gate))
+            gatemode.remove_marker(state, gate)
+    except Exception:
+        pass
     if p.get("vcs") == "git":
         lines.append("vcs: git")
     elif p.get("vcs") == "none":
@@ -395,6 +503,10 @@ def render(root: Path, profile_file: Path, profile, errors: list, manifest: list
     if errors:
         lines.append("profile-invalid: " + "; ".join(errors[:5]) + ". No gate runs and every edit and shell call is "
                      "refused until the owner fixes the profile in their own editor (C52)")
+    bad_watch = profiles.session_id_watch_unreadable(p)  # MW-110, R279c Q2: one extra line, only when it cannot be read
+    if bad_watch:
+        lines.append(f"messaging.session_id_watch_until is {bad_watch!r}, not a date (YYYY-MM-DD): it counts as passed, so a "
+                     f"session with no verified id is refused; the owner sets a date or empties it")
     rel = None  # the same `--profile` part the install wrote (content check F2)
     if Path(profile_file).resolve() != paths.profile_path(root).resolve():
         try:
@@ -405,6 +517,7 @@ def render(root: Path, profile_file: Path, profile, errors: list, manifest: list
     lines.append("drift: none" if not items else "drift: " + "; ".join(items) + ". Fix: mkway install")
     lines.append(_locks_line(root, p, bundle))
     lines.extend(_card_lines(root, p, session))
+    lines.extend(_staged_lines(root, p, session))
     lines.extend(_agent_lines(root, p, session))
     lines.extend(_ledger_lines(root, p))
     lines.extend(_ask_lines(root, p))
@@ -414,10 +527,24 @@ def render(root: Path, profile_file: Path, profile, errors: list, manifest: list
     lines.extend(_inbox_lines(root, p, session))
     lines.extend(_rules_lines(root, p))
     lines.append(REFUSAL_RULE)
+    lines.extend(_role_lines(root))
     signal = _signal_line(root, p, env, session)
     if signal:
         lines.append(signal)
     lines.append(_error_counts(profiles.state_dir(root, p)))
+    try:  # MW-112: the failed agent record stays on the start line until a row is written again (R271c)
+        import board
+        lines.extend(board.failed_agent_lines(profiles.state_dir(root, p)))
+        import scorecard
+        unread = scorecard.unread_state_writes(root, profiles.state_dir(root, p))  # R279d (a)
+        if unread:
+            lines.append(f"unreadable writes that passed and named the state folder: {unread} (logged, not blocked; "
+                         f"`mkway scorecard` counts them)")
+    except Exception:
+        pass
+    lines.extend(_stop_crash_lines(profiles.state_dir(root, p), manifest))  # MW-115, the named limit of K8
+    lines.extend(_refusal_failure_lines(profiles.state_dir(root, p), session))  # MW-128, R301a 2
+    lines.extend(_handoff_failure_lines(profiles.state_dir(root, p), session))  # MW-132, R338 6
     unresolved = _unresolved_count(profiles.state_dir(root, p))
     if unresolved:
         lines.append(f"write-target-unresolved: {unresolved} shell commands in the log wrote to targets the lock gate "
@@ -440,5 +567,5 @@ def _unresolved_count(state: Path) -> int:
         except ValueError:
             continue
         count += isinstance(row, dict) and row.get("reason_id") == "write-target-unresolved" and \
-            row.get("kind") == "log"
+            row.get("kind") == "log" and not row.get("note")  # a row with a note is the upgrade guard's own (MW-105)
     return count

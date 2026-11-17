@@ -15,8 +15,10 @@ import json
 import os
 import posixpath
 import re
+import time
+import types
 from pathlib import Path
-from typing import Optional
+from typing import NamedTuple, Optional
 
 import ledger
 import logs
@@ -29,9 +31,16 @@ import runner
 ENGINE_COPY = Path(__file__).resolve().parent.parent  # the copy (or the engine repository) this code belongs to
 
 
+FORM_HINTS = {  # MW-112 (R284): the tool-validation ids say the correct form; a text that already names it is left as it is
+    "card-unknown": ("register id", "; name a card by its register id (`mkway card list` shows them)"),
+    "card-bad-move": ("allowed moves", "; `mkway card list` shows each card's status and the move the card form allows next"),
+}
+
+
 class CardError(Exception):
     def __init__(self, message: str, reason: str = "card-error"):
-        super().__init__(message)
+        known, hint = FORM_HINTS.get(reason, (None, ""))
+        super().__init__(message + hint if hint and known not in message else message)
         self.reason = reason
 
 
@@ -276,10 +285,65 @@ def unbuilt_deliverables(root: Path, profile, card_id: str, text: str) -> None:
         raise CardError(problem[1], reason=problem[0])
 
 
+def verdicts_required(profile) -> bool:
+    """`cards.verdicts` (MW-068): on unless the profile says `off`; a fresh install's profile never says it."""
+    cards = profile.get("cards") if isinstance(profile, dict) else None
+    return not (isinstance(cards, dict) and cards.get("verdicts") == "off")
+
+
+def unverdicted_tests(root: Path, profile, card_id: str, text: str) -> None:
+    """MW-068: refuse `verdict-missing`, `verdict-by-author`, `verdict-by-holder`, `verdict-weak` or `verdict-wrong` while a test node an
+    Acceptance row names has no good verdict row by a reader who did not write the test (`tests/verdicts/<card>.md`);
+    `cards.verdicts: off` skips it, a card that names no node is not affected (the owner's close and the orderer's
+    close both come here)."""
+    if not verdicts_required(profile):
+        return
+    import verdicts
+    state = profiles.state_dir(Path(root), profile)
+    holder = records.holders(state, register.closed_ids(root, profile)).get(card_id, "")
+    nodes, checkers = test_nodes(text), profiles.outbox_settings(profile)["checkers"]
+    problem = verdicts.problem(root, card_id, nodes, holder, state, checkers, text)
+    if problem:
+        raise CardError(problem[1], reason=problem[0])
+    note = verdicts.warning(nodes, checkers)
+    if note:  # ruling R179: no checker named, so the close passes unenforced and says so
+        verdicts.record_not_enforced(root, profile, card_id)
+        NOTES.append(note)
+
+
+NOTES: list = []  # lines a close adds to its output (the CLI prints them after the result line)
+
+
+def take_notes() -> list:
+    """The notes the last close left (MW-068, ruling R179), and clear them."""
+    out = list(NOTES)
+    NOTES.clear()
+    return out
+
+
 def approver(profile) -> str:
     """`orderer` or `owner-only` (the default): who makes a session's `card close` pass (`cards.approver`)."""
     cards = profile.get("cards") if isinstance(profile, dict) else None
     return "orderer" if isinstance(cards, dict) and cards.get("approver") == "orderer" else "owner-only"
+
+
+def stale_holders(root: Path, profile, held: dict, now=None) -> dict:
+    """MW-045: card id -> holder, for the holders in `held` (`records.holders`) that are stale: the last row of the
+    session in `sessions.jsonl` is older than `cards.stale_hours`; with no row, its take record is older than that.
+    An unreadable time is never stale (the strict reading: a live builder is never freed on a guess)."""
+    import records
+    import sessions
+    state, shared = profiles.state_dir(root, profile), profiles.shared_state_dir(root, profile)
+    limit = datetime.timedelta(hours=profiles.cards_stale_hours(profile))
+    now = now or logs.now()
+    seen = sessions.latest(shared)
+    out = {}
+    for card, who in held.items():
+        text = seen[who][0] if who in seen else records.hold_time(state, card, who)
+        when = sessions._when(text)
+        if when is not None and now - when > limit:
+            out[card] = who
+    return out
 
 
 def seen_sessions(state, shared=None) -> tuple:
@@ -360,7 +424,6 @@ PERMIT_SECONDS = 120
 CLOSE_TEST_SECONDS = 600
 TEST_ENV = ("PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "COMSPEC", "TEMP", "TMP", "TMPDIR", "HOME", "USERPROFILE",
             "LANG", "LC_ALL", "ENGINE_TERMS_FILE")
-FAILED = re.compile(r"^(?:FAILED|ERROR) (\S+)", re.M)
 OWNER_TERMINAL = "the owner closes it in their own terminal"
 
 
@@ -477,10 +540,41 @@ def test_nodes(text: str) -> list:
 test_nodes.__test__ = False  # not a pytest test, though its name starts with `test`
 
 
+ON_HEAD = " (the tests ran on HEAD's tree: a file that is only staged, modified or untracked is not seen; commit it)"
+
+
 def tests_problem(root: Path, profile, nodes: list) -> Optional[str]:
-    """None when `python -m pytest <nodes>` passes now in the root; else why not (the red ids, or the tail)."""
+    """None when `python -m pytest <nodes>` passes; else why not (the red ids, or the tail). MW-070: with vcs git the
+    nodes run in an export of HEAD's tree, the one the commit gate makes (MW-060), so nothing staged, unstaged or
+    untracked is seen; with vcs none there is no HEAD and they run in the root."""
     if not nodes:
         return None
+    if profiles.vcs(profile) != "git":
+        return _nodes_problem(root, profile, nodes, "")
+    import gate_commit_tests as export
+    import helpers
+    state = profiles.state_dir(root, profile)
+    work = Path(state) / export.FOLDER / f"close-{os.getpid()}-{int(time.time() * 1000)}"
+    try:
+        try:
+            if export._git(root, "rev-parse", "--verify", "-q", "HEAD").returncode != 0:
+                return "HEAD has no commit, so there is no tree of HEAD to run the tests on: commit the work first"
+            top = Path(export._read(root, "rev-parse", "--show-toplevel").strip())
+            # `_head_folder` reads only these four fields of the gate's run object
+            run = types.SimpleNamespace(work=work, folder=Path(root), top=top, prefix=helpers.top_prefix(root))
+            folder = export._head_folder(run)
+        except (export.NotRun, OSError, ValueError, runner.Refused, runner.TimeoutExpired) as exc:
+            return f"the tree of HEAD could not be exported ({exc.__class__.__name__}: {exc}), so the tests did not run"
+        if not folder.is_dir():
+            return "HEAD's tree holds no folder of this task root, so the tests did not run: commit the work first"
+        return _nodes_problem(folder, profile, nodes, ON_HEAD)
+    finally:
+        export._remove(work, state)
+
+
+def _nodes_problem(folder: Path, profile, nodes: list, note: str) -> Optional[str]:
+    """None when the nodes pass in `folder`; else why not, with `note` at the end of the text."""
+    root = folder
     py = (profile.get("python") or {}).get("command") if isinstance(profile.get("python"), dict) else None
     py = py if isinstance(py, str) and py else "python"
     env = {k: os.environ[k] for k in (*TEST_ENV, *profiles.test_env(profile)) if k in os.environ}
@@ -491,15 +585,158 @@ def tests_problem(root: Path, profile, nodes: list) -> Optional[str]:
     except (runner.Refused, OSError) as exc:
         return f"the tests could not be started ({exc.__class__.__name__}: {exc})"
     if code is None:
-        return f"the tests did not finish within {CLOSE_TEST_SECONDS} s"
+        return f"the tests did not finish within {CLOSE_TEST_SECONDS} s{note}"
     if code == 0:
         return None
     text = (out or b"").decode("utf-8", "replace") + "\n" + (err or b"").decode("utf-8", "replace")
-    failing = [f.replace("\\", "/") for f in FAILED.findall(text)]  # the card's form of a node id
+    import gate_commit_tests as export  # late: it imports this module (MW-114: one reader of ids, whole)
+    failing = [f.replace("\\", "/") for f in export.failed_ids(text)]  # the card's form of a node id
     if failing:
-        return f"{len(failing)} failing: " + "; ".join(failing[:10])
+        return f"{len(failing)} failing: " + "; ".join(failing[:10]) + note
     tail = [ln.strip() for ln in text.splitlines() if ln.strip()][-3:]
-    return f"the run exited {code} and named no failing test ({' | '.join(tail)[:300]})"
+    return f"the run exited {code} and named no failing test ({' | '.join(tail)[:300]}){note}"
+
+
+# --- the red a card inherits at its take (card MW-108, concept lines 2 and 5, kind K2; rulings R270a, R283) -----------------
+
+INHERITED_FILE = "inherited_red.jsonl"  # `<state.dir>/`: one row per `card take` and per `card release-red`, written by the engine
+MAX_SHOWN = 5
+
+
+class Inherited(NamedTuple):
+    """The red one card inherited, read from the rows of INHERITED_FILE. `taken`: the card has a take row (a card taken
+    before the record existed has none, and keeps the rules it had). `established`: a take row of the card was
+    established. `red`: ids recorded red at its take (and released to it), minus the ids released away. `green`: ids its
+    take recorded green. `released`: {id: card it was released to} for the ids released away."""
+    taken: bool
+    established: bool
+    red: frozenset
+    green: frozenset
+    released: dict
+
+
+def inherited_from_rows(rows, card_id: str) -> Inherited:
+    """Pure: the inherited red of `card_id` from the rows in the order they were written. A take row that is established
+    adds its red and green ids, minus what was released away before; one that is not established adds none. A
+    `release-red` row moves its id: away from its `card`, to its `to` card; a later take never brings it back."""
+    taken = established = False
+    red, green, released = set(), set(), {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if row.get("kind") == "take" and row.get("card") == card_id:
+            taken = True
+            if row.get("established") is True:
+                established = True
+                red |= {i for i in row.get("red") or [] if i not in released}
+                green |= set(row.get("green") or [])
+        elif row.get("kind") == "release-red":
+            test = row.get("test")
+            if row.get("card") == card_id:
+                red.discard(test)
+                released[test] = row.get("to")
+            elif row.get("to") == card_id:
+                red.add(test)
+                released.pop(test, None)
+    return Inherited(taken, established, frozenset(red), frozenset(green), released)
+
+
+def inherited_rows(state) -> list:
+    """The rows of INHERITED_FILE in order; none when the file is missing or cannot be read, a line that is not JSON is skipped."""
+    path = Path(state) / INHERITED_FILE
+    rows = []
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines() if path.is_file() else []
+    except OSError:
+        return []
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict):
+            rows.append(row)
+    return rows
+
+
+def inherited_of(state, card_id: str) -> Inherited:
+    return inherited_from_rows(inherited_rows(state), card_id)
+
+
+def record_inherited_red(root: Path, profile, card_id: str) -> str:
+    """`card take`: write the take row of the card and return the line the take prints. The red at HEAD inside the card's
+    Paths comes from `gate_commit_tests.head_red`, the rows the commit gate kept; the suite is never run here. A take that
+    cannot be established says so in its row and in the line, never silence (R283 1): every red in the card's Paths then
+    counts as new for this card, at its commits and at its close. A row that cannot be written raises OSError."""
+    import gate_commit_tests as gate  # late: it imports this module
+    row = register.find(register.read(root, profile), card_id) or {}
+    found = gate.head_red(root, profile, paths_set(row.get("paths", "")))
+    logs.append_jsonl(profiles.state_dir(Path(root), profile) / INHERITED_FILE, {
+        "time": logs.now().isoformat(timespec="milliseconds"), "kind": "take", "card": card_id,
+        "established": found.established, "red": found.red, "green": found.green, "record": found.record,
+        "behind": found.behind})
+    if not found.established:
+        return (f"inherited red: {NE} (no usable test record of HEAD's history), so every red in the Paths of {card_id} "
+                f"counts as new red for this card; the next merge writes the row")
+    shown = "; ".join(found.red[:MAX_SHOWN]) + (f"; and {len(found.red) - MAX_SHOWN} more" if len(found.red) > MAX_SHOWN else "")
+    return f"inherited red: {len(found.red)} recorded for {card_id}" + (f": {shown}" if found.red else "")
+
+
+def release_red(root: Path, profile, state, test_id: str, to_card: str, caller: Optional[str]) -> str:
+    """`card release-red <test id> --to <card>` (R283 4): the card's orderer moves one inherited red id to another named
+    open card, and the close of that card then needs it green. `caller` is the session id of the by-permit, None for the
+    owner's terminal (who orders the cards that name no session). One row in INHERITED_FILE: the cards, the test id and the
+    orderer. Refusals: `card-unknown` (no such card), `card-bad-move` (the target is not open, no open card inherited the
+    id, two cards did, or the id is already the target's), `close-not-orderer` (the caller did not order the card that holds
+    the id)."""
+    rows = register.read(root, profile)
+    target = register.find(rows, to_card)
+    if target is None:
+        raise CardError(f"{to_card} is not in the register", reason="card-unknown")
+    if target.get("status") != "open":
+        raise CardError(f"{to_card} is {target.get('status')}: a red is released only to an open card, which then owns "
+                        f"it; name an open card with --to", reason="card-bad-move")
+    holders = [r["id"] for r in rows if r.get("status") != "closed" and test_id in inherited_of(state, r["id"]).red]
+    if not holders:
+        raise CardError(f"{test_id} is no inherited red of an open card (its take recorded it red, it was not released "
+                        f"away): nothing to release", reason="card-bad-move")
+    if len(holders) > 1 or holders[0] == to_card:
+        raise CardError(f"{test_id} is inherited by {', '.join(holders)}: it is released from one card to a different "
+                        f"one; the owner settles two holders", reason="card-bad-move")
+    source = register.find(rows, holders[0])
+    ordered = source.get(register.ORDERED) or register.OWNER
+    who = caller or register.OWNER
+    if who != ordered:
+        raise CardError(f"{holders[0]} was ordered by {ordered}, not by {who}: only its orderer releases a red of it; the "
+                        f"owner gives the order with `mkway give {holders[0]} <session id prefix>`", reason="close-not-orderer")
+    logs.append_jsonl(Path(state) / INHERITED_FILE, {
+        "time": logs.now().isoformat(timespec="milliseconds"), "kind": "release-red", "card": holders[0], "to": to_card,
+        "test": test_id, "by": who, "session": who})
+    try:
+        append_log_row(root, profile, holders[0], "release-red", f"{test_id} released to {to_card} by {who[:8]}")
+    except (OSError, CardError):
+        pass  # the record row is the proof; the Log line is a courtesy
+    return f"{test_id} released from {holders[0]} to {to_card}"
+
+
+def _paths_test_files(root: Path, profile, card_id: str) -> list:
+    """The entries of the card's Paths that are test files or folders under the test roots and exist (no glob)."""
+    row = register.find(register.read(root, profile), card_id) or {}
+    roots = test_roots(profile)
+    return sorted(e for e in paths_set(row.get("paths", ""))
+                  if not any(c in e for c in "*?[") and any(e == r or e.startswith(r + "/") for r in roots)
+                  and (Path(root) / e).exists())
+
+
+def close_nodes(root: Path, profile, card_id: str, text: str) -> tuple:
+    """(the nodes the orderer's close runs, whether some came from the inherited red). The Acceptance rows' nodes, the ids
+    the card inherited, and (R283 1) when its take was not established the test files of its Paths, so any red in them
+    refuses."""
+    inherited = inherited_of(profiles.state_dir(Path(root), profile), card_id)
+    extra = sorted(inherited.red)
+    if inherited.taken and not inherited.established:
+        extra += _paths_test_files(root, profile, card_id)
+    return list(dict.fromkeys([*test_nodes(text), *extra])), bool(extra)
 
 
 def append_log_row(root: Path, profile, card_id: str, step: str, result: str) -> None:
@@ -578,14 +815,19 @@ def move(root: Path, profile, card_id: str, target: str, *, session: bool, recor
                             reason="card-bad-move")
         text = card_file(root, profile, card_id).read_text(encoding="utf-8")
         problem = close_problem(root, profile, card_id)
+        inherited = False
         if problem is None:
             unchecked_outbox(root, profile, card_id, text)  # MW-019: before the tests run
             unbuilt_deliverables(root, profile, card_id, text)  # MW-020
-            problem = tests_problem(root, profile, test_nodes(text))
+            unverdicted_tests(root, profile, card_id, text)  # MW-068: before the tests run
+            nodes, inherited = close_nodes(root, profile, card_id, text)  # MW-108: the card's inherited red runs too
+            problem = tests_problem(root, profile, nodes)
         if problem:
             raise CardError(f"{card_id} cannot close: {problem}. Every Acceptance row's test must pass now (a missing "
-                            f"test is a failure): fix the code or the row, then close again",
-                            reason="close-tests-failing")
+                            f"test is a failure): fix the code or the row, then close again"
+                            + (f". The red this card inherited at its take must pass too; its orderer may release one id "
+                               f"to another open card: `mkway card release-red <test id> --to <card id>`"
+                               if inherited else ""), reason="close-tests-failing")
     if target == "closed" and closer is None:
         problem = close_problem(root, profile, card_id)
         if problem:
@@ -594,6 +836,7 @@ def move(root: Path, profile, card_id: str, target: str, *, session: bool, recor
         text = card_file(root, profile, card_id).read_text(encoding="utf-8")
         unchecked_outbox(root, profile, card_id, text)
         unbuilt_deliverables(root, profile, card_id, text)  # MW-020
+        unverdicted_tests(root, profile, card_id, text)  # MW-068
     # H1 (R54), close-fix 10 (A(c)): Paths are recorded once, at the first open from `proposed`; a re-open (`card open`
     # of an open card, or from `waiting`, `waiting-owner` or `closed`) never records them, light mode included. The
     # decision reads the sealed register's status only: no env, no profile, no command. `record_paths` is kept for
@@ -617,18 +860,22 @@ def move(root: Path, profile, card_id: str, target: str, *, session: bool, recor
         try:
             text = f"opened by {opener}; ordered by {ordered}"
             append_log_row(root, profile, card_id, "open", text)
-            ledger.add(root, profile, card=card_id, topic="card open", quote=text, source=f"card {card_id} open")
+            ledger.add(root, profile, card=card_id, topic="card open", quote=text, source=f"card {card_id} open",
+                       by=f"session:{opener}")  # MW-049: the lead that ran the move, never the owner's label
         except OSError as exc:
-            raise CardError(f"{card_id} is open, but its Log row could not be written ({exc.__class__.__name__}); "
+            raise CardError(f"{card_id} is open, but its Log row could not be written ({exc.__class__.__name__}): "
+                            f"{card_file(root, profile, card_id)} is not written; "
                             f"the owner adds the row «opened by {opener}; ordered by {ordered}»",
                             reason="close-log-failed")
     if closer is not None:
         try:
             text = f"closed by {closer}; ordered by {ordered}"
             append_log_row(root, profile, card_id, "close", text)
-            ledger.add(root, profile, card=card_id, topic="card close", quote=text, source=f"card {card_id} close")
+            ledger.add(root, profile, card=card_id, topic="card close", quote=text, source=f"card {card_id} close",
+                       by=f"session:{closer}")  # MW-049: the orderer that ran the move, never the owner's label
         except OSError as exc:
-            raise CardError(f"{card_id} is closed, but its Log row could not be written ({exc.__class__.__name__}); "
+            raise CardError(f"{card_id} is closed, but its Log row could not be written ({exc.__class__.__name__}): "
+                            f"{card_file(root, profile, card_id)} is not written; "
                             f"the owner adds the row «closed by {closer}; ordered by {ordered}»",
                             reason="close-log-failed")
     return write

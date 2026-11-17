@@ -18,19 +18,33 @@ def _rows(text):
     return rows
 
 
+def _row_problems(card_id, title, status, folder):
+    """The failed conditions of one register row, each named with its card id; an empty list when the row is sound."""
+    folder = folder.strip("`")
+    problems = []
+    if not CARD_ID.match(card_id):
+        problems.append(f"{card_id}: id not in the MW form")
+    if not title:
+        problems.append(f"{card_id}: no title")
+    if not status:
+        problems.append(f"{card_id}: no status")
+    if not (REPO / folder / "CARD.md").is_file():
+        problems.append(f"{card_id}: no CARD.md in {folder}")
+    if not Path(folder).name.startswith(card_id + "-"):
+        problems.append(f"{card_id}: folder {folder} is not named by the id")
+    return problems
+
+
 @pytest.mark.engine_repo  # MW-002 (C14): needs the engine repository itself
 def test_register_row_points_to_card_folder():
-    """E10: the register is an Id/Title/Status/Folder table; each row's folder holds CARD.md."""
+    """Checks: the register is an Id/Title/Status/Folder table and each row's folder holds its CARD.md (E10)."""
     rows = _rows(REGISTER.read_text(encoding="utf-8"))
     assert rows[0] == HEADER
     body = rows[1:]
     assert body, "the register has no card"
-    for card_id, title, status, folder in body:
-        assert CARD_ID.match(card_id), card_id
-        assert title and status
-        folder = folder.strip("`")
-        assert (REPO / folder / "CARD.md").is_file(), folder
-        assert Path(folder).name.startswith(card_id + "-")
+    bad = [problem for card_id, title, status, folder in body
+           for problem in _row_problems(card_id, title, status, folder)]
+    assert not bad, bad
 
 
 TEMPLATE = REPO / "cards" / "_TEMPLATE" / "CARD.md"
@@ -73,8 +87,8 @@ def _shape(text):
 
 @pytest.mark.engine_repo  # MW-002 (C14): needs the engine repository itself
 def test_card_has_template_sections():
-    """E11 (changed for R12): the cleaned template is the one-page form: its header labels, its three sections in
-    order, their table columns, at most one page before the log; every card after R12 has the same shape."""
+    """Checks: the cleaned template is the one-page form, and every card after R12 has the same shape (E11)."""
+    # its header labels, its three sections in order, their table columns, at most one page before the log
     text = TEMPLATE.read_text(encoding="utf-8")
     labels, sections = _shape(text)
     assert labels == STATUS_LABELS
@@ -86,9 +100,8 @@ def test_card_has_template_sections():
     before_log = text.split("## 8. Log")[0]
     assert len(before_log.splitlines()) <= MAX_LINES_BEFORE_LOG
     rows = _rows(REGISTER.read_text(encoding="utf-8"))[1:]
-    for card_id, _title, _status, folder in rows:
-        if (card_id, folder.strip("`")) in HISTORY_CARDS:
-            continue
-        card_labels, card_sections = _shape((REPO / folder.strip("`") / "CARD.md").read_text(encoding="utf-8"))
-        assert card_labels == labels, card_id
-        assert card_sections == sections, card_id
+    checked = [(card_id, folder.strip("`")) for card_id, _title, _status, folder in rows
+               if (card_id, folder.strip("`")) not in HISTORY_CARDS]
+    mismatch = [card_id for card_id, folder in checked
+                if _shape((REPO / folder / "CARD.md").read_text(encoding="utf-8")) != (labels, sections)]
+    assert not mismatch, mismatch

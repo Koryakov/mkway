@@ -1,0 +1,59 @@
+........................................................................ [  7%]
+........................................................................ [ 15%]
+........................................................................ [ 23%]
+........................................................................ [ 31%]
+........................................................................ [ 39%]
+........................................................................ [ 47%]
+........................................................................ [ 54%]
+........................................................................ [ 62%]
+........................................................................ [ 70%]
+........................................................................ [ 78%]
+........................................................................ [ 86%]
+........................................................................ [ 94%]
+.......................................................                  [100%]
+============================ slowest 40 durations =============================
+22.79s setup    tests/test_mw030_live_install.py::test_the_check_run_from_the_task_folder_is_clean
+12.26s call     tests/test_install.py::test_install_refuses_a_python_that_is_not_an_interpreter
+8.11s call     tests/test_install.py::test_install_names_old_ignore_lines_for_cards_and_ledger
+8.11s call     tests/test_e2e.py::test_generated_commands_cannot_break_a_session[git]
+7.45s call     tests/test_mw035_install_line.py::test_the_message_prefix_starts_the_install_message
+7.34s call     tests/test_e2e.py::test_generated_commands_cannot_break_a_session[none]
+6.95s call     tests/test_install.py::test_install_creates_folders_starter_profile_and_ignore_lines
+6.30s call     tests/test_mw027_install_commit.py::test_a_fresh_worktree_has_working_hooks_with_no_install
+6.21s call     tests/test_install.py::test_install_copies_the_fixed_set_and_writes_the_lock
+5.65s call     tests/test_mw012_commands.py::test_a_first_install_writes_a_watch_marker_for_each_form_gate_that_is_on
+5.55s call     tests/test_mw027_install_commit.py::test_install_prints_the_two_commit_lines
+5.08s call     tests/test_install_seal.py::test_install_writes_gitattributes_and_seals_only_the_head_register
+4.92s call     tests/test_mw027_install_commit.py::test_install_commit_runs_the_two_lines_in_the_owners_terminal_only
+4.78s call     tests/test_mw005_gate.py::test_the_first_commit_of_a_repository_and_a_root_below_the_top
+4.70s call     tests/test_mw027_install_commit.py::test_hook_entries_go_into_the_committed_settings_json
+4.55s call     tests/test_mw026_state_in_root.py::test_install_shared_writes_the_key_into_the_profile
+4.54s call     tests/test_startline.py::test_probe_stops_an_orphaned_child
+4.45s call     tests/test_mw027_install_commit.py::test_a_reinstall_strips_mkways_entries_from_settings_local_json
+4.43s call     tests/test_install.py::test_hook_entries_generated_and_other_keys_kept
+4.40s call     tests/test_mw003_fixlist.py::test_install_seal_reads_head_from_the_root_folder
+4.40s call     tests/test_install.py::test_check_compares_hash_runs_tests_and_skips_scan
+4.38s call     tests/test_mw027_install_commit.py::test_install_writes_the_bundle_gitignore_so_the_first_add_is_clean
+4.27s call     tests/test_mw004_install.py::test_a_real_install_records_an_agent
+4.23s call     tests/test_mw035_install_line.py::test_install_commit_takes_only_its_own_paths
+4.16s call     tests/test_e2e.py::test_end_to_end[git]
+4.15s call     tests/test_mw006_commit_content.py::test_data_files_are_refused_by_extension
+4.14s call     tests/test_mw026_state_in_root.py::test_a_root_below_a_linked_worktree_writes_nothing_above_itself
+4.11s call     tests/test_install.py::test_check_runs_the_term_scan_when_a_term_file_is_set
+4.09s call     tests/test_mw012_commands.py::test_a_re_install_keeps_the_modes
+4.05s call     tests/test_install.py::test_check_lists_and_pins_the_term_scan_exceptions
+3.97s call     tests/test_mw032_reinstall_safe.py::test_reinstall_after_check_succeeds
+3.95s call     tests/test_e2e.py::test_end_to_end[none]
+3.89s call     tests/test_repo_scan.py::test_repository_has_no_term_hits
+3.89s call     tests/test_mw018_gate.py::test_the_check_warns_when_the_settings_lack_the_sendmessage_entry
+3.86s call     tests/test_mw027_install_commit.py::test_the_settings_files_are_protected_paths[.claude/settings.json]
+3.80s call     tests/test_mw035_install_line.py::test_a_stale_engine_ignore_line_is_removed_and_the_others_stay
+3.58s call     tests/test_install.py::test_cards_and_ledger_are_tracked
+3.51s call     tests/test_mw016_version.py::test_the_lock_carries_the_version
+3.38s call     tests/test_install.py::test_profile_arg_install_has_no_false_drift
+3.34s call     tests/test_mw027_install_commit.py::test_the_engine_copy_is_never_converted_by_git
+919 passed in 506.58s (0:08:26)
+
+real	8m27.941s
+user	0m0.015s
+sys	0m0.031s

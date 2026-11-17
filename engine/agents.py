@@ -7,6 +7,14 @@
          the last one for the pair; `result` is the payload's `last_assistant_message` in full, else the last
          assistant message of the file `agent_transcript_path` names (`result_source` payload, transcript, or none).
 A value the hook cannot establish is the text «not established»: never a guess. Records are append-only.
+
+The reader's guard records (card MW-116) live in their own file `<state.dir>/reader_runs.jsonl`, never in `agents.jsonl`:
+  start: `{kind, session_id, card, files, allow_sha256, extract_sha256, time}`, written by `mkway reader start`.
+  call:  `{kind, session_id, agent_id, agent_type, tool, path, decision, allow_sha256, time}`, one per tool call of the
+         reader, written by the allowlist hook together with its decision (`allow` or `refuse`).
+  reader-lease-expired: `{kind, session_id, card, old_started, old_allow_sha256, new_card, time}`, written by `mkway reader
+         start` when it takes over a lock older than 30 minutes (card MW-116, R295); it names the old run.
+The end row of a checker agent (`record_end`) also empties the allow file of its session (`reader_allow.release`).
 """
 from __future__ import annotations
 
@@ -18,6 +26,7 @@ from typing import Optional
 import logs
 
 AGENTS = "agents.jsonl"
+READER_RUNS = "reader_runs.jsonl"  # card MW-116: the start rows and the call rows of the reader's allowlist
 NE = "not established"
 DEFAULT_CAP_MINUTES = 30  # `agents.cap_minutes` when the profile does not say (part 2)
 
@@ -31,8 +40,13 @@ def append(state_dir, row: dict) -> dict:
     return row
 
 
-def rows(state_dir) -> list:
-    path = Path(state_dir) / AGENTS
+def append_reader(state_dir, row: dict) -> dict:
+    logs.append_jsonl(Path(state_dir) / READER_RUNS, row)
+    return row
+
+
+def rows(state_dir, name: str = AGENTS) -> list:
+    path = Path(state_dir) / name
     if not path.is_file():
         return []
     out = []
@@ -44,6 +58,11 @@ def rows(state_dir) -> list:
         if isinstance(row, dict):
             out.append(row)
     return out
+
+
+def reader_rows(state_dir) -> list:
+    """The rows of `reader_runs.jsonl`, in file order."""
+    return rows(state_dir, READER_RUNS)
 
 
 def _text(value, default=NE) -> str:
@@ -133,11 +152,14 @@ def record_end(state_dir, payload) -> dict:
     last = _last_row(state_dir, session, agent)
     began = _parse(last.get("started")) if last and last.get("kind") == "start" else None
     result, source = result_of(payload)
-    return append(state_dir, {
+    row = append(state_dir, {
         "kind": "end", "session_id": session, "agent_id": agent, "agent_type": kind,
         "started": stamp(began) if began else NE, "ended": stamp(ended),
         "elapsed_seconds": round((ended - began).total_seconds(), 3) if began else NE,
         "result": result, "result_source": source})
+    import reader_allow  # late: reader_allow imports this module
+    reader_allow.release(state_dir, payload)  # card MW-116: the end of a checker run empties the allow list of its session
+    return row
 
 
 # ---- the cap and the start block (part 2) -----------------------------------------------------------------------

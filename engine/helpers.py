@@ -56,8 +56,9 @@ def _posix_abs(text: str, drive_root: bool) -> str:
     return str(PurePosixPath(os.path.normpath(text).replace("\\", "/")))
 
 
-def norm(path, root, *, top_prefix: str = "", home=None, cwd=None) -> Optional[str]:
-    """The repo-relative posix form of `path`, `.` for the root itself, or None outside the root."""
+def _full(path, root, top_prefix, home, cwd):
+    """(the absolute posix form of `path`, the root's posix text, whether the root is on a drive) or None for an empty or
+    non-text path. The one place the root variables, `~` and a relative path are read (MW-103: `absolute` uses it too)."""
     if not isinstance(path, str) or not path.strip():
         return None
     p = _clean(path).replace("\\", "/")
@@ -81,7 +82,21 @@ def norm(path, root, *, top_prefix: str = "", home=None, cwd=None) -> Optional[s
         else:
             base = str(cwd).replace("\\", "/") if cwd is not None else root_text
         p = base.rstrip("/") + "/" + rel
-    full = _posix_abs(p, drive_root)
+    return _posix_abs(p, drive_root), root_text, drive_root
+
+
+def absolute(path, root, *, top_prefix: str = "", home=None, cwd=None) -> Optional[str]:
+    """The absolute posix form of `path` by the rules of `norm`, or None for an empty or non-text path (MW-103)."""
+    got = _full(path, root, top_prefix, home, cwd)
+    return None if got is None else got[0]
+
+
+def norm(path, root, *, top_prefix: str = "", home=None, cwd=None) -> Optional[str]:
+    """The repo-relative posix form of `path`, `.` for the root itself, or None outside the root."""
+    got = _full(path, root, top_prefix, home, cwd)
+    if got is None:
+        return None
+    full, root_text, drive_root = got
     top = _posix_abs(root_text, drive_root).rstrip("/")
     if _fold(full) == _fold(top):
         return "."
@@ -98,6 +113,101 @@ def top_prefix(root) -> str:
         if (parent / ".git").exists():
             return here.relative_to(parent).as_posix() if parent != here else ""
     return ""
+
+
+def _canon(path: str) -> str:
+    """The real path in one comparable form: links, `..` and (on Windows) 8.3 short names resolved for the part that
+    exists, backslashes turned into slashes, case-folded on Windows (MW-103: moved here from the lead gate, MW-105)."""
+    return _fold(os.path.realpath(path).replace("\\", "/").rstrip("/") or "/")
+
+
+def real_root(root) -> str:
+    """The session's root as a real path with forward slashes, as the start line and an outside refusal print it (MW-107,
+    R274): the install root, whether or not it is a git repository."""
+    return os.path.realpath(str(root)).replace("\\", "/")
+
+
+def checkouts_below(root) -> tuple:
+    """(the canonical paths of the other checkouts of the root's repository that lie strictly below `root`, a problem text or
+    ""). Another checkout of the same repository is outside the root whatever the folder nesting (MW-107, R274 5.2): the
+    list is read from `<common git dir>/worktrees/*/gitdir`, the very files `git worktree list` prints; no process is run.
+    A root with no git entry, or a git folder with no linked checkout, has none and no problem. A file that cannot be read
+    gives the problem text and the checkouts found so far: the caller judges by the root rule and logs the failure."""
+    found, problem = [], ""
+    try:
+        here = Path(root).resolve()
+        top = next((p for p in [here, *here.parents] if (p / ".git").exists()), None)
+        if top is None:
+            return (), ""
+        git = top / ".git"
+        if git.is_file():
+            text = git.read_text(encoding="utf-8").strip()
+            if not text.startswith("gitdir:"):
+                return (), ""
+            gitdir = (top / text[len("gitdir:"):].strip()).resolve()
+            pointer = gitdir / "commondir"
+            common = (gitdir / pointer.read_text(encoding="utf-8").strip()).resolve() if pointer.is_file() else gitdir
+        else:
+            common = git
+        listing = common / "worktrees"
+        places = [common.parent] if common.name == ".git" else []
+        for entry in sorted(listing.iterdir()) if listing.is_dir() else []:
+            try:
+                where = (entry / "gitdir").read_text(encoding="utf-8").strip()
+                places.append((entry / where).parent)  # an absolute pointer replaces `entry`, a relative one is read from it
+            except (OSError, UnicodeError) as exc:
+                problem = f"the worktree list of the repository could not be read ({entry.name}: {exc.__class__.__name__})"
+        inner = _canon(str(here))
+        found = [c for c in (_canon(str(p)) for p in places) if c != inner and c.startswith(inner.rstrip("/") + "/")]
+    except (OSError, UnicodeError, ValueError) as exc:
+        return tuple(found), f"the worktree list of the repository could not be read ({exc.__class__.__name__})"
+    return tuple(found), problem
+
+
+# ---- a path outside the repository (MW-105): pure text rules; the shell reads the disk -------------------------------------
+
+_DEVICE_DRIVE = re.compile(r"^[/\\]{2}[?.][/\\](?=[A-Za-z]:(?:[/\\]|$))")
+
+
+def is_unc(path) -> bool:
+    """True when the raw text names a network path: two leading separators (either kind) that are not an extended or a
+    device prefix before a drive letter (`\\\\?\\C:\\`, `\\\\.\\C:\\`, or the slash forms). `\\\\?\\UNC\\` is a network path.
+    Decided on the text alone, so nothing touches the network (R260a, R260b 3)."""
+    text = _clean(path) if isinstance(path, str) else ""
+    return len(text) >= 2 and text[0] in "/\\" and text[1] in "/\\" and not _DEVICE_DRIVE.match(text)
+
+
+def strip_device_prefix(path: str) -> str:
+    """The text without a leading `\\\\?\\` or `\\\\.\\` (or `//?/`, `//./`) that is followed by a drive letter; any other
+    text, `\\\\?\\UNC\\` included, unchanged (R260b 1: realpath is not relied on for either prefix)."""
+    found = _DEVICE_DRIVE.match(path)
+    return path[found.end():] if found else path
+
+
+def glob_head_folder(path: str) -> str:
+    """The folder in front of a glob path's first `*`, `?` or `[`: the head up to its last `/`, as `core_lock._glob_folder`
+    takes it for an entry (`C:/a/b/up*` is `C:/a/b`, `C:/*` is `C:`, `/*` is empty). R260b."""
+    cut = min((i for i, ch in enumerate(path) if ch in "*?["), default=len(path))
+    head = path[:cut]
+    return head.rsplit("/", 1)[0] if "/" in head else ""
+
+
+def strip_stream(path: str) -> str:
+    """The path without an NTFS stream suffix: a colon in the last component after the drive colon cuts the rest, so the
+    stream is judged by its base name (R260 b). A drive colon is a letter and a colon followed by a separator, the end of
+    the text, or a second colon later."""
+    drive = 2 if len(path) >= 2 and path[1] == ":" and path[0].isalpha() and (
+        len(path) == 2 or path[2] in "/\\" or ":" in path[2:]) else 0
+    start = max(path.rfind("/"), path.rfind("\\"), drive - 1) + 1
+    colon = path.find(":", start)
+    return path if colon < 0 else path[:colon]
+
+
+def touches_folder(folder: str, path: str) -> bool:
+    """True when the canonical `path` is the canonical `folder`, lies below it, or is one of its ancestors, compared on a
+    separator boundary, never as a bare prefix (`.../upgrade2` is not `.../upgrade`; R260 b, R260a 2)."""
+    inner, outer = path.rstrip("/"), folder.rstrip("/")
+    return inner == outer or inner.startswith(outer + "/") or outer.startswith(inner + "/")
 
 
 def matches(rel: Optional[str], entry: str) -> bool:
@@ -182,23 +292,83 @@ class Simple:
     shape: str = ""  # the unknown shapes of the text it came from, comma-joined (remainder item 10, R95 (1b))
 
 
-def _split_heredocs(text: str):
-    lines = text.split("\n")
-    out, bodies, i = [], defaultdict(deque), 0
-    while i < len(lines):
-        line = lines[i]
-        out.append(line)
-        i += 1
-        for m in HEREDOC.finditer(line):
-            dash, delim, body = m.group(1), m.group(3), []
-            while i < len(lines):
-                cur = lines[i].rstrip("\r")
+def _split_heredocs(text: str, shell: str = "bash"):
+    """(the text with every here-doc body and its delimiter line taken out, {delimiter: deque of bodies in order}).
+    The text is read as the shell reads it (MW-061): a newline inside single or double quotes is part of the word, so
+    a `<<WORD` inside quoted text is text, not a here-doc; a body starts after the first newline that is not inside
+    quotes (one inside a `$(...)` or backticks is outside them, as in `"$(cat <<'EOF' ...)"`); a `#` comment is skipped."""
+    esc = "`" if shell == "powershell" else "\\"
+    n, i, last = len(text), 0, 0
+    out, bodies, pending = [], defaultdict(deque), []
+    stack = [["code", 0]]  # frames: code, sq (flag: ansi `$'...'`), dq, sub (open parentheses of a `$(`), bt (backticks)
+    while i < n:
+        kind, ch = stack[-1][0], text[i]
+        if kind == "sq":
+            if ch == "'":
+                stack.pop()
+            elif ch == "\\" and stack[-1][1]:
                 i += 1
-                if (cur.lstrip("\t") if dash else cur) == delim:
-                    break
-                body.append(cur)
-            bodies[delim].append("\n".join(body))
-    return "\n".join(out), bodies
+        elif kind == "dq":
+            if ch == esc:
+                i += 1
+            elif ch == '"':
+                stack.pop()
+            elif ch == "$" and text.startswith("(", i + 1):
+                stack.append(["sub", 1])
+                i += 1
+            elif ch == "`" and shell != "powershell":
+                stack.append(["bt", 0])
+        elif ch == esc:
+            i += 1
+        elif ch == "'":
+            stack.append(["sq", int(i > 0 and text[i - 1] == "$" and shell != "powershell")])
+        elif ch == '"':
+            stack.append(["dq", 0])
+        elif ch == "`" and shell != "powershell":
+            if kind == "bt":
+                stack.pop()
+            else:
+                stack.append(["bt", 0])
+        elif ch == "$" and text.startswith("(", i + 1):
+            stack.append(["sub", 1])
+            i += 1
+        elif kind == "sub" and ch in "()":
+            stack[-1][1] += 1 if ch == "(" else -1
+            if not stack[-1][1]:
+                stack.pop()
+        elif ch == "#" and (i == 0 or text[i - 1].isspace() or text[i - 1] in _SEP_CHARS):
+            end = text.find("\n", i)
+            i = (n if end < 0 else end) - 1
+        elif ch == "<" and text.startswith("<<", i):
+            found = HEREDOC.match(text, i)
+            if found:
+                pending.append((found.group(1), found.group(3)))
+                i = found.end() - 1
+        elif ch == "\n" and pending:
+            out.append(text[last:i])
+            pos, closed = i + 1, False
+            for dash, delim in pending:
+                body, closed = [], False
+                while pos < n:
+                    end = text.find("\n", pos)
+                    end = n if end < 0 else end
+                    cur = text[pos:end].rstrip("\r")
+                    pos = end + 1
+                    if (cur.lstrip("\t") if dash else cur) == delim:
+                        closed = True
+                        break
+                    body.append(cur)
+                bodies[delim].append("\n".join(body))
+            pending = []
+            if not closed or pos > n:  # the text ends in the body or on the delimiter line: no newline is left
+                last = i = n
+                break
+            out.append("\n")
+            last = i = pos
+            continue
+        i += 1
+    out.append(text[last:])
+    return "".join(out), bodies
 
 
 _SEP_CHARS = ";&|()"
@@ -261,7 +431,7 @@ def unknown_shape(cmd: str, shell: str = "bash") -> str:
     unknown and the command's writes as `everywhere`."""
     if not isinstance(cmd, str):
         return ""
-    text, _bodies = _split_heredocs(cmd)
+    text, _bodies = _split_heredocs(cmd, shell)
     blank, comment = _blank_text(text, shell)
     found = ["comment"] if comment else []
     found += [name for name, rx in _KEYWORD_SHAPES if rx.search(blank)]
@@ -313,7 +483,7 @@ def parse(cmd: str, shell: str = "bash") -> list:
         raise ParseError("not a text")
     # PowerShell takes U+2013, U+2014 and U+2015 as `-` (remainder item 5, H10)
     text = cmd.replace("\\", "/").translate(_PS_DASHES) if shell == "powershell" else cmd
-    text, bodies = _split_heredocs(text)
+    text, bodies = _split_heredocs(text, shell)
     toks = _tokens(text, shell)
     shape = unknown_shape(cmd, shell)
     if "CDPATH" not in shape and any(re.match(r"CDPATH(?:=|$)", t) for t in toks):  # `export "CDPATH=x"`
@@ -463,6 +633,7 @@ class Commit:
     paths: list
     all: bool = False
     include: bool = False
+    only: bool = False  # MW-058: `--only` or `-o` given (git's default when paths are named)
     allow_empty: bool = False
     amend: bool = False
     cwd: Optional[str] = None
@@ -828,15 +999,18 @@ def git_builtins() -> set:
     return _GIT_BUILTINS
 
 
-def git_form_problem(cmd: str, shell: str = "bash", extra=frozenset()):
+def git_form_problem(cmd: str, shell: str = "bash", extra=frozenset(), base=None):
     """(reason id, what) for a git call the reader cannot check, or None (close-fix 8, A-M2, R83 «refused outright»):
     `--pathspec-from-file` (`pathspec-unparsed`); a `GIT_CONFIG_` assignment anywhere in a command that runs git, a
     git subcommand not in the built-in list (`-c alias.*`, a configured alias), or a `git commit` long option that is
-    not an exact name the reader knows (`--inc`) (`command-unparsed`). A text that does not parse is item 7's."""
+    not an exact name the reader knows (`--inc`) (`command-unparsed`). A text that does not parse is item 7's.
+    `base` is the built-in list when the caller already holds it (the pure core is handed it as a fact); with None it
+    is read from the engine's defaults (`git_builtins()`)."""
     try:
         simples = parse(cmd, shell)
     except ParseError:
         return None
+    builtins = git_builtins() if base is None and any(_prog(_argv(s.words)) == "git" for s in simples) else base
     config_env = any(_GIT_CONFIG_ENV.match(w) for s in simples for w in s.words)
     for s in simples:
         argv = _argv(s.words)
@@ -844,7 +1018,7 @@ def git_form_problem(cmd: str, shell: str = "bash", extra=frozenset()):
             if config_env:
                 return "command-unparsed", "a `GIT_CONFIG_` variable can turn a git command into another one"
             sub, args, _cwd = _git_sub(argv)
-            if sub is not None and sub not in git_builtins() and sub not in extra:
+            if sub is not None and sub not in builtins and sub not in extra:
                 return "command-unparsed", f"`git {sub}` is not a built-in git command (an alias or an external one)"
             if sub == "commit":
                 i = 0
@@ -861,7 +1035,7 @@ def git_form_problem(cmd: str, shell: str = "bash", extra=frozenset()):
                         not a.startswith("--") and len(a) == 2 and a[0] == "-" and a[1] in _COMMIT_VALUE_SHORT)
                     i += 2 if takes_value else 1
         for sub in s.subs:
-            found = git_form_problem(sub, shell, extra)
+            found = git_form_problem(sub, shell, extra, builtins)
             if found:
                 return found
     return None
@@ -917,6 +1091,8 @@ def _commit_of(s: Simple, root, base="") -> Optional[Commit]:
                 c.all = True
             elif name == "--include":
                 c.include = True
+            elif name == "--only":
+                c.only = True
             elif name == "--allow-empty":
                 c.allow_empty = True
             elif name == "--amend":
@@ -941,6 +1117,8 @@ def _commit_of(s: Simple, root, base="") -> Optional[Commit]:
                     c.all = True
                 elif ch == "i":
                     c.include = True
+                elif ch == "o":
+                    c.only = True
                 j += 1
             i += 1
             continue
@@ -1054,16 +1232,16 @@ def join_folder(base, path: str):
     return p if not base else base.rstrip("/") + "/" + p
 
 
-def _cd_target(prog: str, args: list):
-    """The folder a `cd`-like command names, or None when it names none it can read (no argument, `-`, `~`, a
-    variable, a substitution or a glob)."""
+def _cd_target(prog: str, args: list, home=None):
+    """The folder a `cd`-like command names, or None when it names none it can read (no argument, `-`, `~` when `home` is not
+    given, a variable, a substitution or a glob). MW-105 (R260d C1): with `home`, `~` and `~/...` are read (`_exists` expands them)."""
     if prog in ("set-location", "sl", "push-location") or prog in ("cd", "chdir", "pushd"):
         named = _ps_named(args, "-path") + _ps_named(args, "-literalpath")
         rest = named or [a for a in args if not a.startswith("-") or a == "-"]
         if len(rest) != 1:
             return None
         target = _clean(rest[0])
-        if not target or target in ("-", "~") or _UNREADABLE.search(target):
+        if not target or target == "-" or (target == "~" and home is None) or _UNREADABLE.search(target):
             return None
         return target
     return None
@@ -1253,9 +1431,11 @@ def _assigns_only(s: Simple) -> bool:
         _ASSIGN.match(w) and not _RUNS_A_COMMAND.search(w) for w in words)
 
 
-def _exists(root, folder) -> bool:
+def _exists(root, folder, home=None) -> bool:
     if root is None or folder is None:
         return root is None
+    if home is not None and (folder == "~" or folder.startswith("~/")):  # MW-105 (R260d C1): `~` is the home the card resolves
+        folder = str(home).replace("\\", "/") + folder[1:]
     if _is_abs(folder):  # a Git-Bash folder (`/c/...`) on a drive root is that drive's folder (close-fix 14)
         p = Path(_posix_abs(folder, bool(_DRIVE.match(str(Path(root)).replace("\\", "/")))))
     else:
@@ -1266,18 +1446,19 @@ def _exists(root, folder) -> bool:
         return False
 
 
-def folder_track(simples: list, start, root=None):
+def folder_track(simples: list, start, root=None, home=None):
     """Yield (simple, folder) with the folder each simple command runs in: from `start` (`""` the root, a repo path,
     or None when it cannot be read), following `cd`, `chdir`, `pushd`/`popd`, `Set-Location`/`sl`,
     `Push-Location`/`Pop-Location`; a subshell's change ends with it. `env -C <dir>` changes the folder of its own
     command only; `pushd`/`popd` with `-n` or `±N` make the folder unknown (close-fix 7). A change counts only in a
     plain position (`_plain_position`) and, when `root` is given, to a folder that exists; any other makes the
-    folder unknown (close-fix 11, B-H3). One helper for writes and commits (H5, R44)."""
-    for s, folder, _runs in _track(simples, start, root):
+    folder unknown (close-fix 11, B-H3). One helper for writes and commits (H5, R44). With `home` (MW-105), a `cd` to `~` or
+    `~/...` reads the folder under it."""
+    for s, folder, _runs in _track(simples, start, root, home):
         yield s, folder
 
 
-def _track(simples: list, start, root=None):
+def _track(simples: list, start, root=None, home=None):
     """`folder_track`'s walk: yield (simple, folder, runs), `runs` true when the simple is in a plain position, that
     is, it runs for sure (`_plain_position`; after `&&` only when everything in front of it in the chain cannot fail:
     a `cd` to a folder that exists, an assignment that runs no command; false blocks, E97, E98). `expand_vars` takes
@@ -1337,9 +1518,9 @@ def _track(simples: list, start, root=None):
         if prog in _CD:
             if prog in _PUSH:
                 stacks[d].append(bases[d])
-            target = _cd_target(prog, argv[1:])
+            target = _cd_target(prog, argv[1:], home)
             folder = None if target is None else join_folder(bases[d], target)
-            bases[d] = folder if _exists(root, folder) else None
+            bases[d] = folder if _exists(root, folder, home) else None
             # X11 addendum: a change followed by `&&` or `||` (or one after `&&`) holds only through the pure `&&`
             # chain; `cd x && b || c` runs c after a failed cd, in the old folder. False blocks (E96, E97): a change
             # in a plain position to a folder the gate read as existing cannot fail, so a `;` after its `&&` chain no
@@ -1369,19 +1550,38 @@ def _based(w: Writes, base) -> Writes:
     return out
 
 
-def shell_writes(cmd: str, shell: str = "bash", cwd="", root=None) -> Writes:
+DELETE_PROGS = frozenset({"rm", "rmdir", "unlink", "del", "erase", "rd", "remove-item", "ri"})
+
+
+def is_delete_line(s: Simple) -> bool:
+    """True when the program of this simple command (read through `env`, `timeout` and the like) is a delete program, or it is
+    `find` with `-delete`: the delete gate judges what such a line removes (MW-107, R274e). A word that is only an argument
+    (`echo rm > x`) makes no delete line."""
+    argv = _argv(s.words)
+    prog = _prog(argv)
+    return prog in DELETE_PROGS or (prog == "find" and any(a.lower() == "-delete" for a in argv))
+
+
+def shell_writes(cmd: str, shell: str = "bash", cwd="", root=None, home=None, skip_deletes: bool = False) -> Writes:
     """The paths a shell command may write, each read from the folder it runs in (`cwd`: `""` the root, a repo path,
     or None when the start folder cannot be read; batch 3 H5 and item 15). With `root`, a `cd` to a folder that does
-    not exist makes the folder unknown (close-fix 11)."""
+    not exist makes the folder unknown (close-fix 11). With `home` (MW-105, R260d C1), a `cd` to `~` or `~/...` is read.
+    With `skip_deletes` (MW-107, R274e), the targets of a delete program are left out (the delete gate's), but its redirects
+    and every other simple command of a compound are read as always."""
     try:
         simples = expand_vars(parse(cmd, shell), shell, root=root, start=cwd)
     except ParseError:
         return Writes(everywhere=True, unparsed=True)
     out = Writes(everywhere=any(s.shape for s in simples))  # remainder item 10: a shape: writes everywhere
-    for s, base in folder_track(simples, cwd, root=root):
-        w = _writes_of(s, shell)
+    for s, base in folder_track(simples, cwd, root=root, home=home):
+        # a delete line (R274e 3, round-2 item 2): the delete flag is no write of its own, but every other word is read as always, so
+        # a `find` that also runs `-exec` or writes with `-fprint` keeps its writes-anywhere flag
+        w = _writes_of(replace(s, words=[x for x in s.words if x.lower() != "-delete"]), shell) \
+            if skip_deletes and is_delete_line(s) else _writes_of(s, shell)
+        if skip_deletes and _prog(_argv(s.words)) in DELETE_PROGS:  # the targets of a delete program are the delete gate's
+            w.paths = [r for r in s.redirects if r.lower() not in _NULLS]
         for sub in s.subs:
-            w.add(shell_writes(sub, shell))
+            w.add(shell_writes(sub, shell, skip_deletes=skip_deletes))
         out.add(_based(w, base))
     return out
 
@@ -1439,7 +1639,8 @@ def _writes_of(s: Simple, shell: str) -> Writes:
     elif prog == "perl" and any(a.startswith("-i") or (a.startswith("-") and "i" in a[1:]) for a in args):
         w.everywhere = True
     elif prog in ("find",):
-        if "-delete" in args or "-exec" in args or "-execdir" in args or "-ok" in args:
+        if "-delete" in args or "-exec" in args or "-execdir" in args or "-ok" in args or "-okdir" in args \
+                or any(a.lower() in ("-fprint", "-fprint0", "-fprintf", "-fls") for a in args):  # MW-107: a find that writes a file
             w.everywhere = True
     elif prog == "xargs":
         w.everywhere = True
@@ -1930,7 +2131,9 @@ def mkway_calls(cmd: str, shell: str = "bash") -> list:
 
 _ENGINE_TEXT = re.compile(r"(?<![\w-])mkway(?:\.py)?['\"]?\s+\S*?(?:card|lock|gate|install|upgrade|check|hook|search"
                           r"|decision|give|sessions)\b", re.I)
-_PLAIN_WORD = r"""(?:[A-Za-z0-9_./:=@%+,-]+|"[^"$`{}\[\]()*?\\]*"|'[^'$`{}\[\]()*?\\]*')"""
+# MW-048: the content of a quoted word is literal text; inside double quotes only what a shell still expands (`$`, a
+# backtick) and a backslash stay out; a single-quoted word holds anything but its closing quote
+_PLAIN_WORD = r"""(?:[A-Za-z0-9_./:=@%+,-]+|"[^"$`\\]*"|'[^']*')"""
 # the `cd` folder of a plain call: a plain word, or a quoted one that may hold a backslash (`"C:\x\y"`: inside double
 # quotes a backslash before `\`, `"`, `$` or a backtick is an escape and is not read; inside single quotes it is text)
 _CD_WORD = (r"""(?:[A-Za-z0-9_./:=@%+,-]+|"(?:[^"$`{}\[\]()*?\\]|\\(?![\\"$`]))*"|'[^'$`{}\[\]()*?]*')""")
@@ -2001,7 +2204,9 @@ def engine_call_problem(cmd: str, bundle_root: str, norm) -> Optional[str]:
     no other segment, pipe, redirect, `VAR=` prefix or wrapper; no `--profile` or `--root` (R54)."""
     m = _PLAIN_CALL.match(cmd or "")
     if not m:
-        return "it is not one plain engine call (a chain, pipe, redirect, variable, quote form or wrapper)"
+        return ("it is not one plain engine call (a chain, pipe or redirect outside quotes, a variable, a wrapper, or "
+                "a `$`, backtick or backslash inside double quotes); put a quote that holds a dollar sign or "
+                "backtick in a file under mkway/asks and pass --quote-file")
     if m.group("cd") is not None:  # false blocks, part 1 (E96): a literal folder inside the root, any spelling
         if norm(m.group("cd").strip("'\"")) is None:
             return "its `cd` leaves the root"

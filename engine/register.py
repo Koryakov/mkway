@@ -11,8 +11,11 @@ content. Every engine write first checks the seal (`register-tampered` on a diff
 writes the seal and the copy (write-to-temp then replace) and only then replaces the register. One writer at a time
 (R19c): `<state.dir>/register.lock`, created exclusively with a random token, held from the seal check to the last
 replace; a lock older than 30 s is stale and is taken over; a writer whose lock was taken over refuses
-(`register-busy`); a second writer waits up to 5 s, then refuses. The way out of `register-tampered` is the owner's
-`mkway card resync`. Decided limit: two coordinated undetected writes (the register and `register.sha`) defeat the
+(`register-busy`); a second writer waits up to 5 s, then refuses. Card MW-054: a MISSING seal (a new git work tree
+copy never has it: the state folder is untracked) is made by the first reader when the register equals its HEAD
+version, line ends aside; git is the authority then, one `log` row says so, and a seal that exists and differs, or a
+register that differs from HEAD with no seal, stays `register-tampered`. The way out of `register-tampered` is the
+owner's `mkway card resync`. Decided limit: two coordinated undetected writes (the register and `register.sha`) defeat the
 seal; review of the register's row diff is the backstop.
 """
 from __future__ import annotations
@@ -138,7 +141,7 @@ def parse(text: str, profile) -> list:
             out = []
             for row in lines[i + 1:]:
                 if not row.startswith("|"):
-                    break
+                    continue  # MW-082: a stray line (a merge can leave one) loses no row after it
                 cells = _cells(row)
                 if set(row) <= set("|-: "):
                     continue
@@ -171,22 +174,89 @@ def read(root, profile) -> list:
     return parse(p.read_text(encoding="utf-8"), profile) if p.is_file() else []
 
 
-def seal_problem(root, profile) -> Optional[str]:
-    """None when the seal holds: no register and no seal, or the seal equals the register's sha256."""
-    reg, sha = path(root, profile), sha_path(root, profile)
-    if not reg.exists() and not sha.exists():
+def _lf(data: bytes) -> bytes:
+    return data.replace(b"\r\n", b"\n")
+
+
+def seal_verdict(seal: Optional[str], working: Optional[bytes], committed: Optional[bytes]) -> str:
+    """The seal's decision from values only (card MW-054): `ok`, `differs` (a seal that exists names other bytes),
+    `register-missing` (a seal and no register), `adopt` (no seal, and the register equals its committed HEAD version,
+    line ends aside: a checkout may convert them) or `missing` (no seal, and the register differs from HEAD or is not
+    committed). A seal that exists is never adopted over, whatever HEAD holds."""
+    if seal is None:
+        if working is None:
+            return "ok"
+        return "adopt" if committed is not None and _lf(working) == _lf(committed) else "missing"
+    if working is None:
+        return "register-missing"
+    return "ok" if seal.strip() == digest(working) else "differs"
+
+
+def _committed(root, profile) -> Optional[bytes]:
+    """The register as the HEAD commit of the root's own work tree holds it, or None (no git, no commit, not tracked,
+    git too slow). Read-only: `git show HEAD:./<register>` from the root."""
+    if profiles.vcs(profile) != "git":
         return None
-    if not sha.is_file():
-        return f"{sha.name} is missing"
-    if not reg.is_file():
-        return "the register is missing"
-    if sha.read_text(encoding="utf-8").strip() != digest(reg.read_bytes()):
-        return "the register differs from its seal"
-    return None
+    try:
+        import runner
+        rel = path(root, profile).relative_to(Path(root)).as_posix()
+        proc = runner.git(root, "show", f"HEAD:./{rel}", text=False)
+    except Exception:
+        return None
+    return proc.stdout if proc.returncode == 0 else None
 
 
-def check(root, profile) -> None:
-    problem = seal_problem(root, profile)
+def _adopt(root, profile, working: bytes, locked: bool = False) -> bool:
+    """Make the seal of a register that equals its committed version (a new git work tree copy has none: the seal is
+    untracked state). Git is the authority here (ruled 2026-11-12). Under the register lock (`locked`: the caller
+    holds it already), the seal is checked again first; the file's own bytes are sealed, with the copy of the register
+    beside it, and one `log` row says so. False when it could not be made (the caller then reports the missing
+    seal)."""
+    lock = lock_path(root, profile)
+    token = None
+    if not locked:
+        try:
+            token = _acquire(lock)
+        except (RegisterError, OSError):
+            return False
+    try:
+        reg, sha = path(root, profile), sha_path(root, profile)
+        if sha.exists() or not reg.is_file() or reg.read_bytes() != working:
+            return False  # another writer sealed it, or the register moved: nothing is adopted
+        _replace(sha, digest(working).encode("ascii"))
+        _replace(last_path(root, profile), working)
+        try:
+            import logs
+            logs.write_refusal(_state(root, profile), logs.row(
+                session=None, event="seal", tool=None, gate="register", reason_id="register-seal-adopted",
+                target=reg.relative_to(Path(root)).as_posix(), kind="log", source="HEAD", sha256=digest(working)))
+        except OSError:
+            pass  # the seal stands; a row that cannot be written changes no verdict
+        return True
+    except OSError:
+        return False
+    finally:
+        if token is not None:
+            _release(lock, token)
+
+
+def seal_problem(root, profile, *, _locked: bool = False) -> Optional[str]:
+    """None when the seal holds: no register and no seal, or the seal equals the register's sha256. MW-054: a MISSING
+    seal is made here, once, when the register equals its HEAD version (a git work tree copy); every other case reads
+    as before. `_locked`: the caller (`write`) holds the register lock already."""
+    reg, sha = path(root, profile), sha_path(root, profile)
+    working = reg.read_bytes() if reg.is_file() else None
+    seal = sha.read_text(encoding="utf-8") if sha.is_file() else None
+    committed = _committed(root, profile) if seal is None and working is not None else None
+    verdict = seal_verdict(seal, working, committed)
+    if verdict == "adopt":
+        verdict = "ok" if _adopt(root, profile, working, _locked) else "missing"
+    return {"ok": None, "missing": f"{sha.name} is missing", "register-missing": "the register is missing",
+            "differs": "the register differs from its seal"}[verdict]
+
+
+def check(root, profile, *, _locked: bool = False) -> None:
+    problem = seal_problem(root, profile, _locked=_locked)
     if problem:
         raise RegisterError("register-tampered", f"{problem}; nothing is edited or committed until the owner "
                                                  f"checks it: {OWNER_FIX}")
@@ -242,7 +312,7 @@ def write(root, profile, mutate: Callable[[list], list], *, _before_replace=None
     lock = lock_path(root, profile)
     token = _acquire(lock)
     try:
-        check(root, profile)
+        check(root, profile, _locked=True)
         new_rows = mutate(read(root, profile))
         has = file_has_orderer(root, profile)  # the file's own header decides; a new register follows the profile
         data = render(new_rows, profile, wants_orderer(profile) if has is None else has).encode("utf-8")

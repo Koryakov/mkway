@@ -32,7 +32,7 @@ says each in one line.
 | E2 | a card made under an earlier prefix | prefix DD, open card CARD-001: always refused | `#10536 CARD-001 text` passes; `DD-007` and no id refused | tests/test_mw033_commit_gate.py::test_the_open_card_id_passes_whatever_the_prefix_is_now |
 | E3 | text of `commit-message-card` | «start it with the id» | «put the card id anywhere in the first line, for example -m "<id> <what changed>"» | tests/test_mw033_commit_gate.py::test_the_refusal_says_the_id_may_stand_anywhere_in_the_first_line |
 | E4 | text of `commit-unreadable` on a chained add and commit | did not say to split the call | names «run git add and git commit as two separate calls», for `&&` and `;` | tests/test_mw033_commit_gate.py::test_a_chained_add_and_commit_says_to_use_two_calls |
-| E5 | README, register, changelog | no word | one README line on each rule, register row, a line under `## 0.2.7`, VERSION still 0.2.7 | tests/test_mw033_commit_gate.py::test_readme_register_changelog_and_card_name_the_card |
+| E5 | README, register, changelog | no word | one README line on each rule, register row, a line under the release that names the card, VERSION: see VERSION | tests/test_mw033_commit_gate.py::test_readme_register_changelog_and_card_name_the_card |
 
 ## 8. Log
 
@@ -43,3 +43,4 @@ says each in one line.
 | 2026-11-11 | red: rows E3 to E5 | dfb83ae | all three failed for the right reason (old texts, no README line, no register row) |
 | 2026-11-11 | green: refusal texts of E3 and E4, README lines, card, register, changelog | 5c8952f | rows E3 to E5 green; whole suite, `python -m pytest`, term scan included, no exception added: 891 passed in 436 s. The E5 test got the `engine_repo` mark (the MW-029 guard: it reads the README), the assertions are unchanged |
 | 2026-11-11 | port onto master 28b7ab6 (MW-027 merged): row E5 changed, the changelog line goes under `## 0.2.7` and VERSION is 0.2.7 | the commit that carries this line | the row named `## 0.2.6` and VERSION 0.2.6, true on the branch base f77c7da, wrong on master; the E5 test and this row now name 0.2.7, no other assertion changed; the other rows and the gate are as on 5c8952f; whole suite, `python -m pytest`, term scan included, no exception added: 906 passed in 439 s |
+| 2026-11-12 | MW-040: row E5 named a release number or an old VERSION | the commit that carries this line | the row says «see VERSION» and «the release that names the card»; its test reads the VERSION file and finds the card's changelog line (`tests/_docs.py`), no release number is pinned |

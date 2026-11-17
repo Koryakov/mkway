@@ -35,12 +35,20 @@ def _names(line):
     return [n.strip() for n in line.split(":", 1)[1].split(";")[0].split(",") if n.strip() and n.strip() != "none"]
 
 
+def _add_rows(root, statuses):
+    """Setup: one ledger row per status, through the real ledger command."""
+    ledger = importlib.import_module("ledger")
+    for status in statuses:
+        ledger.add(root, _profile(root), card="C", topic="t", quote="q", source="s", status=status)
+
+
 def test_the_start_block_names_the_search_gate_on_and_off(tmp_path):
-    """E21 (part 5): with the real manifest the `search` gate is in `gates on`; a profile that switches it off moves
-    it to `gates off`, and nothing else moves. Catches: a gate whose switch the start block does not show."""
+    """Checks: the start block lists the search gate under gates on, and under gates off when its switch is off (E21)."""
+    # nothing else moves; Catches: a gate whose switch the start block does not show
     root = task_root(tmp_path)
     block = _block(root)
-    assert "search" in _names(_line(block, "gates on:")) and "search" not in _names(_line(block, "gates off:"))
+    assert "search" in _names(_line(block, "gates on:"))
+    assert "search" not in _names(_line(block, "gates off:"))
     profile = _profile(root)
     profile["gates"] = {"search": {"on": False}}
     block = _block(root, profile)
@@ -49,14 +57,12 @@ def test_the_start_block_names_the_search_gate_on_and_off(tmp_path):
 
 
 def test_the_start_block_counts_the_ledger_rows(tmp_path):
-    """E22 (part 5): when the ledger file exists the block has one line `ledger: N rows, M in force` (a row whose status
-    is superseded or withdrawn is not in force); with no file there is no such line; an empty file is 0 rows. Catches:
-    a ledger nobody is told about, or a count that includes closed decisions as live."""
-    ledger = importlib.import_module("ledger")
+    """Checks: with the ledger file the block has one ledger line with rows and rows in force, none without it (E22)."""
+    # a row whose status is superseded or withdrawn is not in force; an empty file is 0 rows; Catches: a ledger nobody is
+    # told about, or a count that includes closed decisions as live
     root = task_root(tmp_path)
     assert not [l for l in _block(root).splitlines() if l.startswith("ledger:")]
-    for status in ("in force", "superseded", "withdrawn", "in force", "in force"):
-        ledger.add(root, _profile(root), card="C", topic="t", quote="q", source="s", status=status)
+    _add_rows(root, ("in force", "superseded", "withdrawn", "in force", "in force"))
     assert _line(_block(root), "ledger:") == "ledger: 5 rows, 3 in force"
     (root / "mkway" / "ledger" / "ledger.md").write_text("## Ledger\n", encoding="utf-8")
     assert _line(_block(root), "ledger:") == "ledger: 0 rows, 0 in force"
@@ -72,11 +78,9 @@ def _section():
 
 @pytest.mark.engine_repo  # the README is not in an engine copy: `mkway check` leaves this out
 def test_the_readme_has_one_section_decisions_search_before_asking():
-    """E23 (part 6): one section `## Decisions: search before asking` with a body that names both commands, the
-    ledger file and the search record file, the rule, every reason id of the `search` gate (read from the manifest),
-    the lines of an ask (`ledger: N hits`, `> ledger: <verbatim>`, `ledger: 0 hits`, `search: <record id>`), the keys
-    it reads and the start block line. Catches: a section that describes a gate or a command the engine does not
-    have, or leaves out a refusal a session will meet."""
+    """Checks: one search section names the commands, files, gate reasons, ask lines, keys and start line (E23)."""
+    # a section that describes a gate or a command the engine does not have, or leaves out a refusal a session will meet,
+    # is caught here
     text = (REPO / "README.md").read_text(encoding="utf-8")
     assert text.count("\n" + HEADING + "\n") == 1
     flat = " ".join(_section().split())
@@ -84,24 +88,27 @@ def test_the_readme_has_one_section_decisions_search_before_asking():
     manifest = json.loads((REPO / "engine" / "manifest.json").read_text(encoding="utf-8"))["entries"]
     reasons = {r for e in manifest if e["gate"] == "search" for r in e["reason_ids"]}
     assert reasons == {"search-missing", "search-unverified"}
-    for reason in reasons:
-        assert f"`{reason}`" in flat, reason
-    for needed in ("`mkway ledger add --card <id> --topic <text> --quote <verbatim> --source <text>`",
-                   "`mkway search <words>`", "`<bundle.root>/ledger/ledger.md`", "`<state.dir>/searches.jsonl`",
-                   "`knowledge.files`", "`questions.files`", "`ids.decision_row`", "`owner_ask.sources`",
-                   "`ledger: N hits`", "`> ledger: <verbatim>`", "`ledger: 0 hits`", "`search: <record id>`",
-                   "`gates.search`", "`ledger: N rows, M in force`", "`AskUserQuestion`"):
-        assert needed in flat, needed
+    missing_reasons = [r for r in reasons if f"`{r}`" not in flat]
+    assert not missing_reasons, missing_reasons
+    missing_needed = [needed for needed in (
+        "`mkway ledger add --card <id> --topic <text> --quote <verbatim> --source <text>`",
+        "`mkway search <words>`", "`<bundle.root>/ledger/ledger.md`", "`<state.dir>/searches.jsonl`",
+        "`knowledge.files`", "`questions.files`", "`ids.decision_row`", "`owner_ask.sources`",
+        "`ledger: N hits`", "`> ledger: <verbatim>`", "`ledger: 0 hits`", "`search: <record id>`",
+        "`gates.search`", "`ledger: N rows, M in force`", "`AskUserQuestion`") if needed not in flat]
+    assert not missing_needed, missing_needed
 
 
 def test_keys_md_names_what_the_ledger_reads():
-    """E24 (part 6): the `owner_ask.sources` line of KEYS.md names `ledger` as its default; the lines of
-    `knowledge.files`, `questions.files` and `ids.decision_row` name MW-008 as a reader. Catches: a default that is
-    written down as the old one, or a key whose reader nobody can find."""
+    """Checks: owner_ask.sources names ledger as its default, and the readers of the new keys name MW-008 (E24)."""
+    # a default that is written down as the old one, or a key whose reader nobody can find, is caught here
     added = {unquote(r[0]): r for r in section_rows("Added keys")}
     assert added["owner_ask.sources"][1:3] == [NOW, "`owner_ask.sources`"]
-    assert "`ledger`" in added["owner_ask.sources"][3] and "`review`" not in added["owner_ask.sources"][3]
-    assert "MW-008" in added["owner_ask.sources"][4] and "ledger: N hits" in added["owner_ask.sources"][4]
+    assert "`ledger`" in added["owner_ask.sources"][3]
+    assert "`review`" not in added["owner_ask.sources"][3]
+    assert "MW-008" in added["owner_ask.sources"][4]
+    assert "ledger: N hits" in added["owner_ask.sources"][4]
     assert "MW-008" in added["questions.files"][4]
     profile = {unquote(r[1]): r for r in section_rows("Profile keys")}
-    assert "MW-008" in profile["knowledge.files"][4] and "MW-008" in profile["ids.decision_row"][4]
+    assert "MW-008" in profile["knowledge.files"][4]
+    assert "MW-008" in profile["ids.decision_row"][4]

@@ -33,6 +33,11 @@ class Verdict:
             raise ValueError("a refuse or a warn needs a reason id and a message")
 
 
+# MW-055: one short clause that a refusal adds so a session that cannot write a file still finds how to tell its lead
+REPORT_ROUTE = ('To report with no file: `mkway send --to <id-prefix> --kind result --text "<message>"`, then send the '
+                "ping line it prints.")
+
+
 def allow() -> Verdict:
     return Verdict(ALLOW)
 

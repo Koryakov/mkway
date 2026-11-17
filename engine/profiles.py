@@ -6,6 +6,7 @@ handler logs it as `dispatcher-error`.
 """
 from __future__ import annotations
 
+import datetime
 import json
 import re
 from pathlib import Path
@@ -50,11 +51,28 @@ def engine_constants(schema: Optional[dict] = None) -> set:
 def validate(profile) -> list:
     schema = schema_check.load_schema()
     errors = schema_check.check(profile, schema)
+    errors = [e for e in errors if not e.startswith(LEGACY_OUTSIDE_KEY)]  # MW-107 (R274a 10): no profile error for the old key
     if isinstance(profile, dict):
         for group, key in sorted(engine_constants(schema)):
             if isinstance(profile.get(group), dict) and key in profile[group]:
                 errors.append(f"{group}.{key}: engine constant, the profile cannot set it")
+        errors.extend(_outside_errors(profile))
     return errors
+
+
+LEGACY_OUTSIDE_KEY = "leads.outside_writable"  # MW-107 (R274, R274a 10, R274b 1): renamed `paths.outside_writable`; an alias until the
+                                               # upgrade renames it in the profile (kept until the next major, removed with it)
+
+
+def _outside_errors(profile) -> list:
+    """MW-103: a pattern of `paths.outside_writable` with a `..` part is invalid (the schema checks the type, the length and
+    the start). The old key `leads.outside_writable` is no error, whatever it holds (R274a 10): it is an alias."""
+    section = profile.get("paths")
+    items = section.get("outside_writable") if isinstance(section, dict) else None
+    if not isinstance(items, list):
+        return []
+    return [f"paths.outside_writable[{i}]: must not hold a .. part" for i, item in enumerate(items)
+            if isinstance(item, str) and ".." in re.split(r"[/\\]", item)]
 
 
 def _valid_relative(value) -> bool:
@@ -114,6 +132,21 @@ def _clean_strings(value, *, source_name: bool = False):
                                                                         or any(c.isspace() for c in item))):
             return None
     return list(value)
+
+
+def ping_mode(profile) -> str:
+    """`gates.ping.mode` (MW-076): `watch` or `trip`; anything else, or no key, is `trip`."""
+    gates = profile.get("gates") if isinstance(profile, dict) else None
+    ping = gates.get("ping") if isinstance(gates, dict) else None
+    mode = ping.get("mode") if isinstance(ping, dict) else None
+    return "watch" if mode == "watch" else "trip"
+
+
+def sessions_file(profile):
+    """`sessions.file` (MW-076): the path of mkcl's sessions record, as written; None when missing or not text."""
+    group = profile.get("sessions") if isinstance(profile, dict) else None
+    value = group.get("file") if isinstance(group, dict) else None
+    return value.strip() if isinstance(value, str) and value.strip() else None
 
 
 def owner_ask(profile) -> dict:
@@ -183,6 +216,37 @@ def leads_settings(profile) -> dict:
     return {"escalate_hours": hours, "max_cards": cap}
 
 
+def outside_writable(profile) -> list:
+    """`paths.outside_writable` (MW-103, R255b; R274: for every session): the engine's own list from defaults.json, then the
+    profile's additions that are usable (a string that is absolute or starts with `<home>/` or `<temp>/`, with no `..` part),
+    then the folders of the old key `leads.outside_writable`, an alias until the upgrade renames it (R274b 1: nothing gets
+    narrower before the rename). A profile adds, never removes; an unusable item is skipped, as the other accessors do, so a
+    gate never fails on a bad key."""
+    base = list(json.loads(DEFAULTS_FILE.read_text(encoding="utf-8"))["paths"]["outside_writable"])
+    for group in ("paths", "leads"):
+        section = profile.get(group) if isinstance(profile, dict) else None
+        items = section.get("outside_writable") if isinstance(section, dict) else None
+        for item in items if isinstance(items, list) else []:
+            usable = (isinstance(item, str) and re.match(r"(/|[A-Za-z]:[/\\]|<home>/|<temp>/)", item)
+                      and ".." not in re.split(r"[/\\]", item))
+            if usable and item not in base:
+                base.append(item)
+    return base
+
+
+CARDS_STALE_HOURS = 4  # MW-045: the same figure as `leads.escalate_hours`
+
+
+def cards_stale_hours(profile):
+    """`cards.stale_hours` (MW-045): hours a card holder may stay unseen before a take releases its card. An unusable
+    value takes the default, as the other accessors do."""
+    cards = profile.get("cards") if isinstance(profile, dict) else None
+    hours = cards.get("stale_hours") if isinstance(cards, dict) else None
+    if isinstance(hours, bool) or not isinstance(hours, (int, float)) or not hours > 0:
+        return CARDS_STALE_HOURS
+    return hours
+
+
 MESSAGING_DEFAULTS = {"duplicate_window_hours": 1, "dead_hours": 12, "ack_reminder_minutes": 30}  # MW-018
 
 
@@ -197,6 +261,53 @@ def messaging_settings(profile) -> dict:
         value = raw.get(key)
         ok = isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
         out[key] = value if ok else default
+    return out
+
+
+def session_id_watch_until(profile) -> str:
+    """MW-110: `messaging.session_id_watch_until`, the last day an unset launcher variable is warned about and allowed (an
+    ISO date, `YYYY-MM-DD`). Empty means no expiry, and so does any unusable value (not text, not a calendar date), so a
+    bad key never ends the transition early and never fails a gate."""
+    raw = profile.get("messaging") if isinstance(profile, dict) else None
+    value = raw.get("session_id_watch_until") if isinstance(raw, dict) else None
+    if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        return ""
+    try:
+        datetime.date.fromisoformat(value)
+    except ValueError:
+        return ""
+    return value
+
+
+def session_id_watch_unreadable(profile) -> str:
+    """MW-110 (R279c Q2): the value of `messaging.session_id_watch_until` as written when it cannot be read as a date; empty
+    when the key is absent, empty or a date. Such a value counts as PASSED (fail closed): the gates, the start line and
+    `mkway check` name it. A profile that is not an object has none."""
+    raw = profile.get("messaging") if isinstance(profile, dict) else None
+    value = raw.get("session_id_watch_until") if isinstance(raw, dict) else None
+    if value is None or value == "" or session_id_watch_until(profile):
+        return ""
+    return str(value)
+
+
+WAKE_DEFAULTS = {"mode": "on", "deadline_seconds": 14400, "poll_seconds": 5}  # MW-078; the same values as defaults.json
+
+
+def wake_settings(profile) -> dict:
+    """The inbox waiter's keys (MW-078): `mode` (`on` or `off`), `deadline_seconds` (a whole number above 0) and
+    `poll_seconds` (a number above 0). An unusable value (a boolean included) takes its default, so the waiter never
+    fails on a bad key."""
+    raw = profile.get("wake") if isinstance(profile, dict) else None
+    raw = raw if isinstance(raw, dict) else {}
+    out = dict(WAKE_DEFAULTS)
+    if raw.get("mode") in ("on", "off"):
+        out["mode"] = raw["mode"]
+    seconds = raw.get("deadline_seconds")
+    if isinstance(seconds, int) and not isinstance(seconds, bool) and seconds > 0:
+        out["deadline_seconds"] = seconds
+    poll = raw.get("poll_seconds")
+    if isinstance(poll, (int, float)) and not isinstance(poll, bool) and poll > 0:
+        out["poll_seconds"] = poll
     return out
 
 
@@ -253,6 +364,35 @@ def tests_command(profile):
     return value.strip() if isinstance(value, str) and value.strip() else None
 
 
+def verdict_add_mode(profile) -> str:
+    """`tests.verdict_add.mode` (MW-080): `trip` or `watch` as written, else empty; the command takes a missing or unusable
+    key as trip (ruling R196a)."""
+    group = profile.get("tests") if isinstance(profile, dict) else None
+    sub = group.get("verdict_add") if isinstance(group, dict) else None
+    value = sub.get("mode") if isinstance(sub, dict) else None
+    return value if value in ("trip", "watch") else ""
+
+
+RED_PROOF_MODES = ("trip", "watch")  # `tests.red_proof.mode` (MW-072): trip refuses, watch warns and writes the record
+
+
+def red_proof_mode(profile) -> str:
+    """`tests.red_proof.mode`: `watch` or `trip`; a missing or unusable value is `trip`, so the gate never turns itself off."""
+    group = profile.get("tests") if isinstance(profile, dict) else None
+    raw = group.get("red_proof") if isinstance(group, dict) else None
+    mode = raw.get("mode") if isinstance(raw, dict) else None
+    return mode if mode in RED_PROOF_MODES else "trip"
+
+
+def red_proof_decision_pattern(profile) -> str:
+    """`tests.red_proof.decision_pattern` (MW-090): the regex of the decisions a commit message may name; a missing or
+    unusable value is the empty string, which is no decision (fail closed). Whether it compiles is the gate's question."""
+    group = profile.get("tests") if isinstance(profile, dict) else None
+    raw = group.get("red_proof") if isinstance(group, dict) else None
+    pattern = raw.get("decision_pattern") if isinstance(raw, dict) else None
+    return pattern if isinstance(pattern, str) else ""
+
+
 def commit_tests_budget(profile):
     """`gates.commit_tests.budget_seconds` when it is a number above 0, else the default (780)."""
     value = (profile.get("gates") or {}).get("commit_tests") if isinstance(profile, dict) and isinstance(
@@ -261,6 +401,13 @@ def commit_tests_budget(profile):
     if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
         return value
     return COMMIT_TESTS_BUDGET
+
+
+def shape_mode(profile) -> str:
+    """`tests.shape.mode` (MW-073): `watch` when the profile says so, else `trip`; a missing or unusable value is `trip`."""
+    group = profile.get("tests") if isinstance(profile, dict) else None
+    shape = group.get("shape") if isinstance(group, dict) else None
+    return "watch" if isinstance(shape, dict) and shape.get("mode") == "watch" else "trip"
 
 
 def docs_globs(profile) -> list:

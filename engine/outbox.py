@@ -30,18 +30,19 @@ from pathlib import Path
 from typing import Optional
 
 import agents
+import core_ask
 import helpers
 import logs
 import profiles
+import proof
 
-RECORDS = "outbox_checks.jsonl"
+RECORDS = proof.FILE
 RECORD_KIND = "check-written"
 VALID, STALE, UNPROVEN, MISSING = "valid", "stale", "unproven", "missing"
 STATES = (VALID, STALE, UNPROVEN, MISSING)
 DEFAULTS = json.loads(profiles.DEFAULTS_FILE.read_text(encoding="utf-8"))["outbox_check"]
 SHA_NAME = "sha256"
-HOW = "README, «Outbox check: a text leaves only after a fresh reader»"
-_SHA_VALUE = re.compile(r"sha256:[ \t]*([0-9A-Za-z]*)", re.I)
+HOW = core_ask.OUTBOX_HOW  # the decisions that name it are `core_ask` (card MW-065)
 
 
 def suffix() -> str:
@@ -77,18 +78,13 @@ def sha_of(path) -> Optional[str]:
 
 
 def under_dir(settings: dict, rel) -> bool:
-    folder = settings["dir"]
-    return bool(folder) and isinstance(rel, str) and helpers._fold(rel).startswith(helpers._fold(folder) + "/")
+    return core_ask.under_dir(settings["dir"], rel)
 
 
 def doc_of(settings: dict, rel) -> Optional[str]:
     """The document a check file belongs to: `rel` without the suffix, when `rel` is `<outbox.dir>/.../<name><suffix>`;
-    else None."""
-    end = suffix()
-    if not under_dir(settings, rel) or not helpers._fold(rel).endswith(helpers._fold(end)):
-        return None
-    doc = rel[:-len(end)]
-    return doc if doc.rstrip("/") != settings["dir"] and not doc.endswith("/") else None
+    else None (the rule is `core_ask.doc_of`)."""
+    return core_ask.doc_of(settings["dir"], suffix(), rel)
 
 
 def documents(root, profile) -> list:
@@ -135,16 +131,8 @@ def record_check(root, profile, session, check_rel: str) -> dict:
     return row
 
 
-def _moment(value) -> Optional[datetime.datetime]:
-    try:
-        moment = datetime.datetime.fromisoformat(value)
-    except (TypeError, ValueError):
-        return None
-    return moment if moment.tzinfo else moment.replace(tzinfo=datetime.timezone.utc)
-
-
-def _mtime(path) -> datetime.datetime:
-    return datetime.datetime.fromtimestamp(Path(path).stat().st_mtime, tz=datetime.timezone.utc)
+_moment = proof.moment  # MW-068: the time and file-time readers are the shared proof helper's
+_mtime = proof.mtime
 
 
 def _shown(moment: Optional[datetime.datetime]) -> Optional[str]:
@@ -153,21 +141,10 @@ def _shown(moment: Optional[datetime.datetime]) -> Optional[str]:
 
 def _proof(root, profile, rel: str, doc: Path, row, checker: str) -> Optional[str]:
     """None when an agent of type `checker` ran in the session that wrote the check, started after the document's last
-    change and ended after it and before the check was written; else the problem."""
-    session, written = row.get("session"), _moment(row.get("time"))
-    if not isinstance(session, str) or session in ("", agents.NE) or written is None:
-        return "the record of the check's write names no session or no time: write the check again with a write tool"
-    changed = _mtime(doc)
-    state = profiles.state_dir(Path(root), profile)
-    for entry in agents.rows(state):
-        if entry.get("kind") != "end" or entry.get("session_id") != session or entry.get("agent_type") != checker:
-            continue
-        began, ended = _moment(entry.get("started")), _moment(entry.get("ended"))
-        if began is not None and ended is not None and began > changed and changed < ended < written:
-            return None
-    return (f"no agent of type `{checker}` started and ended in session {session} after the last change of the "
-            f"document and before the check was written (a start and an end row in agents.jsonl): run a fresh reader "
-            f"of that type on the file as it is now, then write the check")
+    change and ended after it and before the check was written; else the problem. The read is the shared
+    `proof.fresh_reader_problem` (MW-068, R173 item 2): the verdict check at card close calls the same function."""
+    return proof.fresh_reader_problem(profiles.state_dir(Path(root), profile), doc, row.get("session"), row.get("time"),
+                                      checker)
 
 
 # ---- the scan -----------------------------------------------------------------------------------------------------
@@ -205,7 +182,7 @@ def scan(root, settings: dict, doc: Path):
 
 def sha_values(text: str) -> list:
     """The digest after every `sha256:` in a check's text, lower case (empty for a form with no digest)."""
-    return [m.group(1).lower() for m in _SHA_VALUE.finditer(text or "")]
+    return core_ask.sha_values(text)
 
 
 def base_values(text: str) -> list:

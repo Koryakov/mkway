@@ -44,17 +44,17 @@ def task(tmp_path):
 
 
 def test_search_groups_hits_by_file_and_status(task):
-    """E5 (part 2): a hit is printed as `id  date  topic  quote`; the hits of one file come under that file's path and
-    are grouped by status: in force first, then withdrawn, then superseded; a row that does not hold the word is not
-    printed; the run ends with the hit count. Catches: a superseded decision shown as if it were in force, or a
-    hit with a missing field."""
+    """Checks: the search hit names the ledger file and each hit carries its fields. E5 part 2"""
+    # a hit is printed as id, date, topic, quote; the hits of one file come under that file's path and are grouped by
+    # status: in force first, then withdrawn, then superseded; a row that does not hold the word is not printed; the run
+    # ends with the hit count.
     out = _search(task, "folder")
     lines = [l.strip() for l in out.splitlines()]
     assert "mkway/ledger/ledger.md" in lines
     want = [f"D-1  {TODAY}  folder naming  use short names for the folder", f"D-4  {TODAY}  folder depth  one level only",
             f"D-2  {TODAY}  folder layout  keep the old layout"]
-    for line in want:
-        assert line in lines, line
+    missing = [line for line in want if line not in lines]
+    assert missing == [], missing
     assert [lines.index(l) for l in want] == sorted(lines.index(l) for l in want)
     assert lines.index("in force") < lines.index(want[0]) < lines.index("withdrawn") < lines.index(want[1]) \
         < lines.index("superseded") < lines.index(want[2])
@@ -63,10 +63,10 @@ def test_search_groups_hits_by_file_and_status(task):
 
 
 def test_search_reads_the_ledger_and_every_knowledge_file(tmp_path):
-    """E6 (part 2): with `knowledge.files` naming two files (one more is missing and is skipped), the search reads the
-    ledger and both: a file in ledger form gives its rows (their own ids), a plain file gives each matching line (id
-    `<path>:<line>`, topic the heading above it). The files come in order: the ledger, then the list. Catches: a
-    knowledge file that is never read, or a plain file that is ignored."""
+    """Checks: the search reads the knowledge files and the plain files it is pointed at. E6 part 2"""
+    # with knowledge.files naming two files (one more is missing and is skipped), the search reads the ledger and both: a
+    # file in ledger form gives its rows (their own ids), a plain file gives each matching line (id path:line, topic the
+    # heading above it). The files come in order: the ledger, then the list.
     task = task_root(tmp_path, knowledge={"files": ["notes/facts.md", "notes/more.md", "notes/missing.md"]})
     _add(task, "cache cleanup", "clean the cache nightly")
     (task / "notes").mkdir()
@@ -90,46 +90,55 @@ def test_search_reads_the_ledger_and_every_knowledge_file(tmp_path):
 
 
 def test_search_reads_the_ledger_only_by_default(task):
-    """E7 (part 2): with no `knowledge.files` in the profile only the ledger is read, though a notes file holds the
-    word. Catches: a default that scans the whole repository."""
+    """Checks: the default search leaves out a file outside the knowledge folders and reports one hit. E7 part 2"""
+    # with no knowledge.files in the profile only the ledger is read, though a notes file holds the word.
     (task / "notes").mkdir()
     (task / "notes" / "facts.md").write_text("the cache is cleaned nightly\n", encoding="utf-8")
     out = _search(task, "cache")
-    assert "notes/facts.md" not in out and out.splitlines()[-1] == "hits: 1"
+    assert "notes/facts.md" not in out
+    assert out.splitlines()[-1] == "hits: 1"
 
 
 def test_search_is_a_plain_case_insensitive_word_match(task):
-    """E8 (part 2): the match is plain text and ignores case; a row is a hit when it holds any of the words; the hits
-    come in file order, not ranked; a word that is nowhere gives `hits: 0` and exit 0.
-    Catches: a case-sensitive match, a match that needs every word, or a ranking."""
+    """Checks: the search is a case-insensitive word match, and a query of several words matches any one of them. E8 part 2"""
+    # the match is plain text and ignores case; a row is a hit when it holds any of the words; the hits come in file order,
+    # not ranked; a word that is nowhere gives hits: 0 and exit 0.
     upper = _search(task, "CACHE")
-    assert "D-3" in upper and upper.splitlines()[-1] == "hits: 1"
+    assert "D-3" in upper
+    assert upper.splitlines()[-1] == "hits: 1"
     any_word = _search(task, "nightly", "LAYOUT")
-    assert "D-2" in any_word and "D-3" in any_word and "D-1" not in any_word
+    assert "D-2" in any_word
+    assert "D-3" in any_word
+    assert "D-1" not in any_word
     assert any_word.splitlines()[-1] == "hits: 2"
     none = _search(task, "zzzz")
-    assert none.splitlines()[-1] == "hits: 0" and "D-" not in none
+    assert none.splitlines()[-1] == "hits: 0"
+    assert "D-" not in none
 
 
 def test_every_search_appends_a_record(task):
-    """E9 (part 2): each run appends one row to `<state>/searches.jsonl`: id `S-<n>`, the session (from
-    `CLAUDE_CODE_SESSION_ID`, else null), the time, the words, the hit count and the hit ids; two runs give two rows.
-    Catches: a run that leaves no proof, or a row with no hit ids."""
+    """Checks: each search run writes a proof row with its id, its session and its hit ids. E9 part 2"""
+    # each run appends one row to state/searches.jsonl: id S-n, the session (from CLAUDE_CODE_SESSION_ID, else null), the
+    # time, the words, the hit count and the hit ids; two runs give two rows.
     _search(task, "folder", "cache", env={"CLAUDE_CODE_SESSION_ID": "abc"})
     _search(task, "zzzz")
     first, second = _searches(task)
-    assert first["id"] == "S-1" and second["id"] == "S-2"
-    assert first["session"] == "abc" and second["session"] is None
-    assert first["words"] == ["folder", "cache"] and first["hits"] == 4
+    assert first["id"] == "S-1"
+    assert second["id"] == "S-2"
+    assert first["session"] == "abc"
+    assert second["session"] is None
+    assert first["words"] == ["folder", "cache"]
+    assert first["hits"] == 4
     assert first["hit_ids"] == ["D-1", "D-2", "D-3", "D-4"]
-    assert second["hits"] == 0 and second["hit_ids"] == []
+    assert second["hits"] == 0
+    assert second["hit_ids"] == []
     assert datetime.datetime.fromisoformat(first["time"]) <= datetime.datetime.now(datetime.timezone.utc)
 
 
 def test_search_without_a_profile_or_a_ledger_still_records(tmp_path):
-    """E10 (part 2): a root with no profile, and a root with a profile but no ledger file, both end with exit 0, 0
-    hits and a record (the state folder is the default one when there is no profile).
-    Catches: a search that fails when there is nothing to find, so no record exists and the gate can never pass."""
+    """Checks: a search with nothing to find exits with zero hits and still writes its proof row. E10 part 2"""
+    # a root with no profile, and a root with a profile but no ledger file, both end with exit 0, 0 hits and a record (the
+    # state folder is the default one when there is no profile).
     bare = tmp_path / "bare"
     bare.mkdir()
     assert _search(bare, "x").splitlines()[-1] == "hits: 0"
@@ -140,9 +149,9 @@ def test_search_without_a_profile_or_a_ledger_still_records(tmp_path):
 
 
 def test_a_session_search_is_recorded_for_its_session(task):
-    """E11 (part 2): a session's run prints `mkway-ok search <id> <nonce>`; the `post` group's gate turns it into a
-    `search` record with that session's id (the owner's terminal writes its own record, `by: owner`). Catches: a
-    search the session ran that the gate cannot tell from none."""
+    """Checks: a search the session ran is recorded so the gate can tell it from none. E11 part 2"""
+    # a session's run prints mkway-ok search id nonce; the post group's gate turns it into a search record with that
+    # session's id (the owner's terminal writes its own record, by owner).
     import records
     state = task / "mkway" / "state"
     out = _search(task, "folder", session=True)

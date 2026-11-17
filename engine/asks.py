@@ -25,61 +25,11 @@ from typing import Optional
 
 import profiles
 import records
+# The ask file's five lines are read by the pure core (card MW-065); they are re-exported here for the callers.
+from core_ask import (ASK_SUFFIX, NONE, OPEN, SHAPES, STATUSES, _FIELD, field_problems, fields,  # noqa: F401
+                      parse_deadline)
 
-ASK_SUFFIX = "_ask.md"
 RECORD_KIND = "ask"
-OPEN = "open"
-STATUSES = (OPEN, "answered", "default-taken", "withdrawn")
-SHAPES = {  # field -> the line shape a refusal names
-    "default": "default: <text or none>",
-    "deadline": "deadline: <ISO local time or none>",
-    "blocked": "blocked: <what waits, or none>",
-    "reversible": "reversible: yes|no",
-    "status": "status: open",
-}
-_FIELD = re.compile(r"^(default|deadline|blocked|reversible|status):[ \t]*(.*?)[ \t\r]*$", re.M | re.I)
-NONE = "none"
-
-
-def parse_deadline(value: str) -> Optional[datetime.datetime]:
-    """None for `none`; the time for an ISO time (naive = local, a zone is kept); ValueError for anything else."""
-    text = (value or "").strip()
-    if text.lower() == NONE:
-        return None
-    if not text:
-        raise ValueError("empty")
-    return datetime.datetime.fromisoformat(text[:-1] + "+00:00" if text.endswith("Z") else text)
-
-
-def fields(text: str) -> dict:
-    """The first line of each field of `text`, as written (value stripped); a field with no line is not a key."""
-    found: dict = {}
-    for match in _FIELD.finditer(text or ""):
-        found.setdefault(match.group(1).lower(), match.group(2))
-    return found
-
-
-def field_problems(text: str, *, need_open: bool = True) -> list:
-    """The field names whose line is missing or has no usable value, in the order of `SHAPES`. With `need_open` the
-    status must be `open` (what a session may write); else any of the four statuses."""
-    found = fields(text)
-    bad = []
-    for name in SHAPES:
-        value = found.get(name)
-        if value is None or not value.strip():
-            bad.append(name)
-        elif name == "deadline":
-            try:
-                parse_deadline(value)
-            except ValueError:
-                bad.append(name)
-        elif name == "reversible" and value.strip().lower() not in ("yes", "no"):
-            bad.append(name)
-        elif name == "status":
-            allowed = (OPEN,) if need_open else STATUSES
-            if value.strip().lower() not in allowed:
-                bad.append(name)
-    return bad
 
 
 def folder(root, profile) -> Path:
@@ -301,6 +251,9 @@ def reminders(root, profile, session) -> list:
 _STATUS_LINE = re.compile(r"^(status:[ \t]*)(.*?)([ \t\r]*)$", re.M | re.I)
 
 
+ANSWER_KIND = "ask-answered"  # MW-119: the proof-file record of an answer recorded in the owner's name
+
+
 class AskError(Exception):
     """A refusal of `ask default` or `ask answered`: a reason id and the text the session reads."""
 
@@ -361,12 +314,29 @@ def take_default(root, profile, ask_id: str, by: Optional[str] = None):
     return ask, row
 
 
-def answer(root, profile, ask_id: str, quote: str):
-    """`mkway ask answered <id>` (MW-014, rule 6): sets `status: answered` and writes the ledger row with the owner's
-    words. Returns (ask, ledger row). Raises AskError."""
+def answer(root, profile, ask_id: str, quote: str, caller: Optional[str] = None, lead: bool = False, state=None):
+    """`mkway ask answered <id>` (MW-014, rule 6; MW-119): sets `status: answered` and writes the ledger row with the owner's
+    words. It runs only in the lead: `caller` is the session id of the one-use permit and `lead` says it is a registered
+    lead, else `ask-answered-not-lead` (R272 G5). The row is `session:<id>`, its source starts with `owner`, never `by: owner`;
+    one record of kind `ask-answered` (ask, session, source, quote, time) goes to the proof file in `state` for the board.
+    `caller=None` is the owner's terminal, held as before until the chief rules (MW119-D1). Returns (ask, ledger row)."""
+    import core_ask
     import ledger
     ask = _open_ask(root, profile, ask_id)
+    if caller is None:
+        row = ledger.add(root, profile, card=card_of(root, profile, ask.id), topic=f"ask {ask.id} answered", quote=quote,
+                         source=f"ask file {_rel(root, ask)}", by=ledger.formats()["owner_who"])  # the owner's terminal
+        set_status(ask.path, "answered")
+        return ask, row
+    verdict = core_ask.answer_decision(caller, lead)
+    if verdict.kind != "allow":
+        raise AskError(verdict.reason, verdict.text.split(": ", 1)[1])
     row = ledger.add(root, profile, card=card_of(root, profile, ask.id), topic=f"ask {ask.id} answered", quote=quote,
-                     source=f"ask file {_rel(root, ask)}", by=ledger.formats()["owner_who"])  # MW-015: the owner's answer
+                     source=f"owner, ask file {_rel(root, ask)}", by=f"session:{caller}")
     set_status(ask.path, "answered")
+    if state is not None:
+        import logs
+        import proof
+        logs.append_jsonl(Path(state) / proof.FILE, {"kind": ANSWER_KIND, "ask": ask.id, "session": caller, "source": "owner",
+                                                    "quote": quote, "time": logs.now().isoformat(timespec="milliseconds")})
     return ask, row

@@ -8,6 +8,7 @@ import re
 
 import pytest
 
+import _docs as docs
 from _engine import REPO
 import _copy_guard as guard
 
@@ -19,23 +20,25 @@ def _reads(source):
 
 
 def test_no_collected_test_reads_a_path_a_copy_lacks():
-    """E1: the tests a copy would run, and the helpers: none reads a path install does not copy."""
+    """Checks: the tests a copy would run and the helpers read no path that install does not copy (E1)."""
     lines, _seconds = guard.check_repo(REPO)
     assert not lines, "tests that read a file a copy does not have (mark them engine_repo):\n" + "\n".join(lines)
 
 
+@pytest.mark.perf
 def test_the_guard_runs_in_under_ten_seconds():
-    """E2: collection plus reading the sources of every collected file takes less than ten seconds."""
+    """Checks: collection plus reading the sources of every collected file takes less than ten seconds (E2, R172)."""
     _lines, seconds = guard.check_repo(REPO)
     assert seconds < 10, f"the guard took {seconds:.1f} s"
 
 
 def test_the_guard_fails_when_a_marker_is_dropped(tmp_path):
-    """E3: a scratch copy of one of MW-025's eight tests with its marker dropped: the guard names the test."""
+    """Catches: a scratch copy of one of MW-025's eight tests with its marker dropped, which the guard must name (E3)."""
     text = (REPO / "tests" / "test_mw016_version.py").read_text(encoding="utf-8")
     head, sep, tail = text.partition("def test_the_changelog_covers_the_register(")
     rows = head.rstrip("\n").split("\n")
-    assert sep and "pytest.mark.engine_repo" in rows[-1], "the real test lost its marker line"
+    assert sep, "the real test lost its marker line"
+    assert "pytest.mark.engine_repo" in rows[-1], "the real test lost its marker line"
     marked = "\n".join(rows[:-1]) + "\n\n\n" + sep + tail
     scratch = tmp_path / "scratch" / "test_mw016_version.py"
     scratch.parent.mkdir()
@@ -48,7 +51,7 @@ def test_the_guard_fails_when_a_marker_is_dropped(tmp_path):
 
 
 def test_a_path_join_a_joinpath_and_an_os_join_are_seen():
-    """E4: `REPO / "x"`, `REPO.joinpath("x")`, `os.path.join(REPO, "x")` and a path from the file's own place."""
+    """Catches: a read of REPO by a slash, joinpath or os.path.join form, or from the file's own place, that the guard misses (E4)."""
     src = (
         "def test_a():\n    (REPO / 'README.md').read_text()\n"
         "def test_b():\n    REPO.joinpath('CHANGELOG.md').read_text()\n"
@@ -61,7 +64,7 @@ def test_a_path_join_a_joinpath_and_an_os_join_are_seen():
 
 
 def test_a_module_constant_and_a_helper_carry_the_read_to_the_test():
-    """E5: `README = REPO / "README.md"` used in a test, and a helper that reads: both flag the tests that use them."""
+    """Catches: a constant or a helper that carries a read past the guard, so the tests that use them are not flagged (E5)."""
     src = (
         "README = REPO / 'README.md'\n"
         "def _text():\n    return (REPO / 'CHANGELOG.md').read_text()\n"
@@ -75,7 +78,7 @@ def test_a_module_constant_and_a_helper_carry_the_read_to_the_test():
 
 
 def test_copied_paths_and_scratch_paths_are_not_flagged():
-    """E6: the engine, tools, tests, synthetic fixtures, VERSION, mkway.py and a tmp_path join are fine."""
+    """Checks: the engine, tools, tests, synthetic fixtures, VERSION, mkway.py and a tmp_path join are not flagged (E6)."""
     src = (
         "def test_a():\n    (REPO / 'engine' / 'manifest.json').read_text()\n"
         "def test_b():\n    (REPO / 'VERSION').read_text(); (REPO / 'mkway.py').read_text()\n"
@@ -87,7 +90,7 @@ def test_copied_paths_and_scratch_paths_are_not_flagged():
 
 
 def test_the_whole_suite_in_a_copy_test_is_gone_and_the_row_points_to_the_guard():
-    """E7: MW-025's slow test is removed; its card row E1 names this card's guard test."""
+    """Checks: MW-025's slow test is removed and its card row E1 names this card's guard test (E7)."""
     text = (REPO / "tests" / "test_mw025_copy_check.py").read_text(encoding="utf-8")
     assert "def test_the_tests_a_copy_runs_all_pass_in_a_copy" not in text
     card = (REPO / "cards" / "MW-025-copy-check" / "CARD.md").read_text(encoding="utf-8")
@@ -96,10 +99,10 @@ def test_the_whole_suite_in_a_copy_test_is_gone_and_the_row_points_to_the_guard(
 
 
 def test_register_changelog_and_card_name_the_card():
-    """E8: the register row, a line under `## 0.2.6` of the changelog (moved from 0.2.2 when ported), the card folder."""
+    """Checks: the register row, a changelog line under 0.2.6 and the card folder name the card (E8)."""
     register = (REPO / "cards" / "REGISTER.md").read_text(encoding="utf-8")
     assert re.search(r"^\| MW-029 \| The copy guard is fast \|.*`cards/MW-029-[a-z0-9-]+`", register, re.M)
     changelog = (REPO / "CHANGELOG.md").read_text(encoding="utf-8")
-    top = changelog.split("\n## 0.2.6\n", 1)[1].split("\n## ", 1)[0]
+    top = docs.changelog_section(changelog, "MW-029")
     assert "- MW-029: The copy guard is fast" in top
     assert list((REPO / "cards").glob("MW-029-*/CARD.md"))

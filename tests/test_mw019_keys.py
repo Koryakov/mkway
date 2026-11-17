@@ -7,6 +7,7 @@ import profiles
 import schema_check
 
 GOOD = {"dir": "outbox", "checkers": ["critic", "verifier"], "id_patterns_file": "tools/ids.txt"}
+NOTHING = {"dir": None, "checkers": [], "patterns_file": None}
 
 
 def _profile(outbox):
@@ -14,52 +15,104 @@ def _profile(outbox):
             "python": {"command": "python"}, "outbox": outbox}
 
 
-def test_the_schema_takes_the_outbox_keys_and_refuses_bad_values():
-    """E1: `outbox.dir` and `outbox.id_patterns_file` are repo-relative paths, `outbox.checkers` is a non-empty list of
-    non-empty strings; an absolute or climbing path, an empty list, an empty or non-string item, a string for the list
-    and a key the schema does not know are refused with the key path in the error; the empty group stays valid.
-    Catches: a key the profile can set with a value the gate cannot use, or a group that still refuses every key."""
+def _bad_outbox(name, tmp_path):
+    """The bad outbox value of one case; the absolute values are built from tmp_path."""
+    absolute = tmp_path.as_posix()
+    leading = "/" + tmp_path.relative_to(tmp_path.anchor).as_posix()
+    values = {
+        "dir-absolute": {"dir": absolute},
+        "dir-leading-slash": {"dir": leading},
+        "dir-climbing": {"dir": "../up"},
+        "dir-empty": {"dir": ""},
+        "dir-number": {"dir": 3},
+        "patterns-absolute": {"id_patterns_file": f"{absolute}/x"},
+        "patterns-leading-slash": {"id_patterns_file": f"{leading}/x"},
+        "patterns-empty": {"id_patterns_file": ""},
+        "checkers-empty": {"checkers": []},
+        "checkers-empty-item": {"checkers": [""]},
+        "checkers-number-item": {"checkers": [1]},
+        "checkers-text": {"checkers": "critic"},
+        "unknown-key": {"customer_ids": ["x"]},
+    }
+    return values[name]
+
+
+def _junk_outbox(name, tmp_path):
+    """The unusable outbox value of one case; the absolute value is built from tmp_path."""
+    leading = "/" + tmp_path.relative_to(tmp_path.anchor).as_posix()
+    values = {
+        "mixed-absolute": {"dir": leading, "checkers": [], "id_patterns_file": 5},
+        "mixed-drive": {"dir": tmp_path.as_posix(), "checkers": [], "id_patterns_file": 5},
+        "mixed-types": {"dir": 7, "checkers": ["a", ""]},
+        "climbing-text": {"dir": "..", "checkers": "critic"},
+        "not-an-object": "not an object",
+        "none": None,
+    }
+    return values[name]
+
+
+BAD_OUTBOX = [
+    pytest.param("dir-absolute", "outbox.dir", id="dir-absolute"),
+    pytest.param("dir-leading-slash", "outbox.dir", id="dir-leading-slash"),
+    pytest.param("dir-climbing", "outbox.dir", id="dir-climbing"),
+    pytest.param("dir-empty", "outbox.dir", id="dir-empty"),
+    pytest.param("dir-number", "outbox.dir", id="dir-number"),
+    pytest.param("patterns-absolute", "outbox.id_patterns_file", id="patterns-absolute"),
+    pytest.param("patterns-leading-slash", "outbox.id_patterns_file", id="patterns-leading-slash"),
+    pytest.param("patterns-empty", "outbox.id_patterns_file", id="patterns-empty"),
+    pytest.param("checkers-empty", "outbox.checkers", id="checkers-empty"),
+    pytest.param("checkers-empty-item", "outbox.checkers[0]", id="checkers-empty-item"),
+    pytest.param("checkers-number-item", "outbox.checkers[0]", id="checkers-number-item"),
+    pytest.param("checkers-text", "outbox.checkers", id="checkers-text"),
+    pytest.param("unknown-key", "outbox.customer_ids", id="unknown-key"),
+]
+JUNK_OUTBOX = [
+    pytest.param("mixed-absolute", id="mixed-absolute"),
+    pytest.param("mixed-drive", id="mixed-drive"),
+    pytest.param("mixed-types", id="mixed-types"),
+    pytest.param("climbing-text", id="climbing-text"),
+    pytest.param("not-an-object", id="not-an-object"),
+    pytest.param("none", id="none"),
+]
+KEYS_MD_ROWS = [
+    pytest.param(24, "outbox.dir", "outbox.dir", (), id="row-24-dir"),
+    pytest.param(25, "outbox.id_patterns_file", "outbox.id_patterns_file", ("never holds",), id="row-25-patterns"),
+    pytest.param(26, "outbox.checkers", "outbox.checkers", (), id="row-26-checkers"),
+    pytest.param(30, "customer_ids", "outbox.id_patterns_file",
+                 ("`outbox.id_patterns_file`", "folds"), id="row-30-folded"),
+]
+
+
+@pytest.mark.parametrize("name, key", BAD_OUTBOX)
+def test_the_schema_takes_the_outbox_keys_and_refuses_bad_values(name, key, tmp_path):
+    """Catches: a key the profile can set with a value the gate cannot use, or a group that still refuses every key (E1: outbox.dir and outbox.id_patterns_file are repo-relative paths, outbox.checkers a non-empty list of non-empty strings; an absolute or climbing path, an empty list, an empty or non-string item, a string for the list and a key the schema does not know are refused with the key path in the error; the empty group stays valid)."""
     assert schema_check.check(_profile(GOOD)) == []
     assert schema_check.check(_profile({})) == []
     assert schema_check.check(_profile({"dir": "outbox"})) == []
-    bad = [({"dir": "/abs"}, "outbox.dir"), ({"dir": "../up"}, "outbox.dir"), ({"dir": ""}, "outbox.dir"),
-           ({"dir": 3}, "outbox.dir"), ({"id_patterns_file": "C:/x"}, "outbox.id_patterns_file"),
-           ({"id_patterns_file": ""}, "outbox.id_patterns_file"), ({"checkers": []}, "outbox.checkers"),
-           ({"checkers": [""]}, "outbox.checkers[0]"), ({"checkers": [1]}, "outbox.checkers[0]"),
-           ({"checkers": "critic"}, "outbox.checkers"), ({"customer_ids": ["x"]}, "outbox.customer_ids")]
-    for value, key in bad:
-        errors = schema_check.check(_profile(value))
-        assert any(e.split(":", 1)[0] == key for e in errors), (value, errors)
+    errors = schema_check.check(_profile(_bad_outbox(name, tmp_path)))
+    assert any(e.split(":", 1)[0] == key for e in errors), (name, errors)
 
 
-def test_the_accessor_defaults_and_tolerates_a_bad_value():
-    """E1: `profiles.outbox_settings` gives `dir` and `patterns_file` as posix repo-relative paths and `checkers` as a
-    list; every missing or unusable value is none or an empty list, so a gate never fails on a bad key and a profile
-    that names no checker has no valid check. Catches: a default folder or a default checker the engine invents."""
-    assert profiles.outbox_settings({}) == {"dir": None, "checkers": [], "patterns_file": None}
-    assert profiles.outbox_settings({"outbox": {}}) == {"dir": None, "checkers": [], "patterns_file": None}
+@pytest.mark.parametrize("name", JUNK_OUTBOX)
+def test_the_accessor_defaults_and_tolerates_a_bad_value(name, tmp_path):
+    """Checks: the accessor gives the defaults and tolerates a bad value (E1: profiles.outbox_settings gives dir and patterns_file as posix repo-relative paths and checkers as a list; every missing or unusable value is none or an empty list, so a gate never fails on a bad key and a profile that names no checker has no valid check)."""
+    assert profiles.outbox_settings({}) == NOTHING
+    assert profiles.outbox_settings({"outbox": {}}) == NOTHING
     got = profiles.outbox_settings({"outbox": {"dir": "out\\box/", "checkers": ["critic"],
                                                "id_patterns_file": "tools\\ids.txt"}})
     assert got == {"dir": "out/box", "checkers": ["critic"], "patterns_file": "tools/ids.txt"}
-    for junk in ({"dir": "/abs", "checkers": [], "id_patterns_file": 5}, {"dir": 7, "checkers": ["a", ""]},
-                 {"dir": "..", "checkers": "critic"}, "not an object", None):
-        got = profiles.outbox_settings({"outbox": junk})
-        assert got == {"dir": None, "checkers": [], "patterns_file": None}, junk
-    assert profiles.outbox_settings("not a profile") == {"dir": None, "checkers": [], "patterns_file": None}
+    junk = _junk_outbox(name, tmp_path)
+    assert profiles.outbox_settings({"outbox": junk}) == NOTHING, junk
+    assert profiles.outbox_settings("not a profile") == NOTHING
 
 
-@pytest.mark.parametrize("number, key, path", [
-    (24, "outbox.dir", "outbox.dir"), (25, "outbox.id_patterns_file", "outbox.id_patterns_file"),
-    (26, "outbox.checkers", "outbox.checkers"), (30, "customer_ids", "outbox.id_patterns_file")])
-def test_keys_md_has_a_line_for_each_outbox_key(number, key, path):
-    """E2: rows 24, 25, 26 and 30 of the profile keys are «in schema now» with the schema path they map to and a reason
-    that states the default; row 30 says the key folds into `outbox.id_patterns_file`; the engine ships no patterns.
-    Catches: a key in the schema that KEYS.md still calls later, or a folded key with no trace of where it went."""
+@pytest.mark.parametrize("number, key, path, extras", KEYS_MD_ROWS)
+def test_keys_md_has_a_line_for_each_outbox_key(number, key, path, extras):
+    """Checks: rows 24, 25, 26 and 30 of the profile keys are in schema now, each with the schema path it maps to and a reason that states the default; row 30 says the key folds into outbox.id_patterns_file; the engine ships no patterns (E2)."""
     rows = {int(r[0]): r for r in section_rows("Profile keys")}
     _num, name, verdict, schema_path, reason = rows[number]
-    assert unquote(name) == key and verdict == "in schema now" and unquote(schema_path) == path
+    assert unquote(name) == key
+    assert verdict == "in schema now"
+    assert unquote(schema_path) == path
     assert "default" in reason.lower()
-    if number == 30:
-        assert "`outbox.id_patterns_file`" in reason and "folds" in reason
-    if number == 25:
-        assert "never holds" in reason
+    assert all(text in reason for text in extras)

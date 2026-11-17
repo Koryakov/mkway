@@ -20,7 +20,8 @@ id and the red run's output in its message; later row — the code commit, namin
 When two requirements contradict: `card set <id> waiting`, a Log line that names both, then the ask.
 Test quality: Acceptance rows: one per rule clause of a computed value. The Test cell is a `; ` list of full node ids
 (`tests/test_x.py::test_y`), or `checked by reading: <path>` naming the file read; nothing else.
-C1 rows name real tests; C2 clause tested per row; C3 changed lines run; C4 independent expectation; C5 can fail.
+A test is evidence only when T1 one row, one node; T2 one id, one case; T3 deny plus nearest allow per refusal reason; T4 independent expectation, «Catches: ...» on a failure test; T5 changed lines run; T6 blind verdict; T7 a committed test changes only with a decision; T8 shape: no test imports a test, synthetic data, the real hook for a refusal (criteria: the owner's test criteria, T1-T8).
+Close notes: before `card close`, every test node a row names has a verdict row (true / weak / wrong, reason, by) from a reader who did not write the test in `tests/verdicts/<ID>.md`.
 
 ## 1. Goal
 

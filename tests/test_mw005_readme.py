@@ -50,7 +50,7 @@ def test_the_section_states_the_rules_the_keys_and_every_reason():
     flat = _flat(_section())
     manifest = json.loads((REPO / "engine" / "manifest.json").read_text(encoding="utf-8"))["entries"]
     (entry,) = [e for e in manifest if e["name"] == "commit_tests"]
-    assert len(entry["reason_ids"]) == 4
+    assert len(entry["reason_ids"]) == 16  # changed by MW-056 (E15): the warn `commit-tests-still-red` is the fifth id; MW-072: four red proof ids; MW-090 (T7 decision: R225): five case_map ids; MW-131 (R322): the partial-find warn
     for reason in entry["reason_ids"]:
         assert f"`{reason}`" in flat, reason
     schema = json.loads((REPO / "engine" / "profile.schema.json").read_text(encoding="utf-8"))
@@ -61,7 +61,8 @@ def test_the_section_states_the_rules_the_keys_and_every_reason():
                    "`gates.commit_tests.budget_seconds`", "`780`", "`commit_tests.jsonl`", "`gates.commit_tests`",
                    "`gates off:`", "no hook runs"):
         assert needed in flat, needed
-    for sentence in ("A commit whose staged files all lie under `test_roots` may be red and runs no tests.",
+    # changed by MW-072 (R177): a tests-only commit of a session with a card and pytest runs the suite, so the sentence says when
+    for sentence in ("otherwise it may be red and runs no tests.",
                      "A commit whose staged files all match `paths.docs` runs no tests.",
                      "The owner's own terminal is not gated: no hook runs there."):
         assert sentence in flat, sentence

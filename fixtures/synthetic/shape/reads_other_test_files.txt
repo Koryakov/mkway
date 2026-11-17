@@ -1,0 +1,18 @@
+"""Synthetic replay of a real case (card MW-073): a test that reads the text of other test files by path, through a loop,
+with no Catches or Checks line. Kept as a text file so no test run collects it."""
+import pytest
+
+from _engine import REPO
+
+
+def test_the_listed_tests_are_marked():
+    """The tests of the gap carry the marker, so a copy leaves them out."""
+    wanted = {
+        "tests/test_alpha_version.py": ("test_one", "test_two"),
+        "tests/test_beta_locks.py": ("test_three",),
+    }
+    for rel, names in wanted.items():
+        text = (REPO / rel).read_text(encoding="utf-8")
+        for name in names:
+            marked = "engine_repo" in text.split(f"def {name}(")[0]
+            assert marked, f"{rel}::{name} is not marked"

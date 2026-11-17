@@ -30,7 +30,7 @@ gap; the eight tests carry the marker; the check line names the failing tests (u
 | E2 | the eight tests of the gap | no marker | marked `engine_repo` | tests/test_mw025_copy_check.py::test_the_eight_tests_that_read_engine_repository_files_are_marked |
 | E3 | the tests line of a failing check | the count only | the count and the failing test names | tests/test_mw025_copy_check.py::test_check_names_the_failing_tests_not_only_the_count |
 | E4 | twelve failing tests | the count only | ten names and `2 more` | tests/test_mw025_copy_check.py::test_check_names_at_most_ten_failing_tests |
-| E5 | register, changelog, version | no word | register row, `## 0.2.2` above `## 0.2.1`, `VERSION` 0.2.2 | tests/test_mw025_copy_check.py::test_register_changelog_version_and_card_name_the_card |
+| E5 | register, changelog, version | no word | register row, a line under the release that names the card, VERSION: see VERSION | tests/test_mw025_copy_check.py::test_register_changelog_version_and_card_name_the_card |
 
 ## 8. Log
 
@@ -43,3 +43,4 @@ gap; the eight tests carry the marker; the check line names the failing tests (u
 | 2026-11-11 | the first whole run showed 2 term-scan failures on a line of the red test file (line 104); the line was reworded, no exception added | the commit that carries this line | scan tests green again; the red commit still holds the old line |
 | 2026-11-11 | MW-029: row E1's whole-copy test was too slow for the merge tool (the suite passed 600 s); it is removed and row E1 now names the static guard `tests/test_mw029_fast_guard.py::test_no_collected_test_reads_a_path_a_copy_lacks`; the protection is the same | the commit that carries this line | rows E2 to E5 unchanged |
 | 2026-11-11 | whole suite, `python -m pytest`, term scan included | the commit that carries this line | first run 834 passed, 2 failed (the scan hit above); after the reword the scan tests and E2 pass; second whole run: 836 passed in 637 s (831 on the base, 5 new); no term-scan exception added |
+| 2026-11-12 | MW-040: row E5 named a release number or an old VERSION | the commit that carries this line | the row says «see VERSION» and «the release that names the card»; its test reads the VERSION file and finds the card's changelog line (`tests/_docs.py`), no release number is pinned |

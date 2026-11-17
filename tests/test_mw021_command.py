@@ -23,9 +23,7 @@ def _green(root, tree):
 
 
 def test_rules_lists_each_card_with_its_test_and_its_last_green_tree(tmp_path):
-    """E7: one line per card: id, card path, test path, `exists` or `missing`, and `last green tree <8 characters>`
-    from the newest `pass` row of `commit_tests.jsonl` whose tree holds the test file, else `none`. Catches: a
-    listing that calls a card tested when its test file is gone, or a green tree taken from a failed run."""
+    """Catches: a listing that calls a card tested when its test file is gone, or a green tree taken from a failed run (E7)."""
     root = _task(tmp_path)
     save(root, "rules/K01.md")
     save(root, "tests/rules/K01/test_K01.py")
@@ -43,20 +41,22 @@ def test_rules_lists_each_card_with_its_test_and_its_last_green_tree(tmp_path):
                            second[:8]]
     assert rows["K02"] == ["K02", "rules/K02.md", "tests/rules/K02/test_K02.py", "missing", "last", "green", "tree",
                            "none"]
-    assert code == 0 and cli(root, "rules", session=True)[0] == 0  # a session may run it: it only reads
+    assert code == 0
+    assert cli(root, "rules", session=True)[0] == 0  # a session may run it: it only reads
 
 
 def test_rules_says_what_to_set_when_the_check_is_off(tmp_path):
-    """E7: with the keys unset the command prints one line that names `rules.cards` and `rules.test_for`, and exits 0.
-    Catches: an empty answer that reads as «no rule cards»."""
+    """Catches: an empty answer that reads as «no rule cards» when the keys are unset (E7)."""
     root = _task(tmp_path, rules={})
     code, out, _err = cli(root, "rules")
-    assert code == 0 and "rules.cards" in out and "rules.test_for" in out and "not set" in out
+    assert code == 0
+    assert "rules.cards" in out
+    assert "rules.test_for" in out
+    assert "not set" in out
 
 
 def test_the_start_block_counts_the_cards_and_the_ones_without_tests(tmp_path):
-    """E8: `rules: N cards, M without tests` after the ledger and ask lines; no such line when the keys are not set.
-    Catches: a start block that hides a rule card with no test."""
+    """Catches: a start block that hides a rule card with no test, or shows its line with the keys not set (E8)."""
     root = _task(tmp_path)
     save(root, "rules/K01.md")
     save(root, "tests/rules/K01/test_K01.py")

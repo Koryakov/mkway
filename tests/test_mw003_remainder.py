@@ -170,24 +170,6 @@ def test_disguised_engine_script_names_are_engine_calls(gtask):
         assert _kind(shell(gtask, command)) != "engine-call-not-plain", command
 
 
-def test_a_glob_that_reaches_a_closed_target_segment_by_segment_refuses(gtask):
-    """Item 4, R95 (4a) (H14, M1): a wildcard in a folder segment (`mkway/engin?/…`) matched neither a target's
-    literal nor its parent, and its literal folder (`mkway`) is no target, so the engine was overwritten with no log
-    row; and a glob character right after a target's full literal was no path boundary, so `"$PWD"/mkway/engine*`
-    was only logged. A glob whose leading segments match a closed target's segments one by one now refuses
-    `lock-closed-shell`, and `*`, `?`, `[` after the full literal are a boundary."""
-    for command in ("cp evil.py mkway/engin?/gate_lock.py",        # H14a
-                    'rm -rf "$PWD"/mkway/engine*'):                 # M1
-        assert _kind(shell(gtask, command)) == "lock-closed-shell", command
-    for command in ("rm -rf build/*", "cp a.txt src/"):
-        assert shell(gtask, command).kind != "refuse", command
-
-
-def test_verify_first_a_glob_in_the_locks_segment(gtask):
-    """Item 4, verify first: `tee mkway/l?cks/engine.json < x` writes a lock file through a glob segment."""
-    assert _kind(shell(gtask, "tee mkway/l?cks/engine.json < x")) in ("lock-closed-shell", "lock-file-by-session")
-
-
 def test_powershell_dashes_and_splats(gtask):
     """Item 5 (H10): PowerShell takes U+2013, U+2014 and U+2015 as `-`, but the reader tested only `-`, so
     `–LiteralPath` was read as the positional path; and a splat (`@p`) hid every parameter. Both wrote a lock file

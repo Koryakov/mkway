@@ -11,33 +11,72 @@ A lock is `<shared state dir>/locks/<name>.json`: `{name, state, opened_at, unti
 owner's commands write it (`mkway lock open|close`, from their own terminal). A target is closed unless its lock is open
 and not expired. For one version a marker of the older place, `<bundle.root>/locks/<name>.json` of the work tree, is
 still read: closed wins. `mkway lock open` and `mkway go` remove it.
+
+MW-063: this module reads and writes the markers (disk, clock). The matching of a path or a command text against the
+targets is the pure core's (`core_lock`); `closed_target`, `held_target`, `glob_target` and `named_target` here read
+the markers into a `closed` flag per target and ask the core.
 """
 from __future__ import annotations
 
+import dataclasses
 import datetime
 import json
 import os
-import re
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+import core_lock
+import core_upgrade
 import helpers
 import logs
 import profiles
 
-NEVER_OPEN = ("locks", "register", "state")
+NEVER_OPEN = core_lock.NEVER_OPEN
+Target = core_lock.Target  # the target record is the pure core's; `closed` is read from the markers by `core_targets`
 
 
-@dataclass
-class Target:
-    name: str
-    entries: list
-    built_in: bool
-    open_by_default: bool = False  # a profile target open until the owner's marker (MW-010)
+HOME_MARK = "<home>"  # stands for a home that cannot be found; a folder that still holds it is not resolved
 
 
-def built_in(root, profile, profile_file=None) -> list:
+def upgrade_resolution(env=None) -> tuple:
+    """(entries, problems) of the `upgrade` target (MW-105, R260 a, R260d C6 and C7): the folder entries of the upgrade folder as
+    `mkway upgrade` resolves it from this environment (`core_upgrade.upgrade_folder`, the same inputs as `upgrade.py`: home is
+    HOME, else USERPROFILE, else the home folder) and, when MKWAY_UPGRADE_DIR names another folder, the default resolution too,
+    so an owner-wide override never unguards the real folder. Each entry is an absolute folder in slashes with a trailing `/`.
+    A folder that cannot be guarded is left out and named in `problems`, one text each: the home cannot be found (the default
+    folder needs it), or the folder is not an absolute path (a relative override is accepted by the command, but a relative entry
+    would be read as a folder of the repository). `env` None is the process environment."""
+    env = os.environ if env is None else env
+    windows = os.name == "nt"
+    try:
+        home = env.get("HOME") or env.get("USERPROFILE") or str(Path.home())
+    except (RuntimeError, OSError, KeyError):  # no home: Path.home() raises RuntimeError, or KeyError for a user with no entry
+        home = None
+    plain = {k: v for k, v in env.items() if k != "MKWAY_UPGRADE_DIR"}
+    first, override = core_upgrade.upgrade_folder(env, windows, home or HOME_MARK)
+    second = core_upgrade.upgrade_folder(plain, windows, home or HOME_MARK)[0]
+    entries, problems = [], []
+    for folder, name in ((first, "MKWAY_UPGRADE_DIR" if override else "the default upgrade folder"),
+                         (second, "the default upgrade folder")):
+        if home is None and HOME_MARK in folder:
+            problems.append(f"the home folder cannot be found (HOME and USERPROFILE are not set), so {name} is not guarded")
+        elif not core_upgrade.is_full_path(folder, windows):
+            problems.append(f"{name} is not an absolute path ({folder}), so it is not guarded")
+        else:
+            entry = folder.replace("\\", "/").rstrip("/") + "/"
+            if entry not in entries:
+                entries.append(entry)
+        if not override:
+            break  # one folder: the default is the first
+    return entries, problems
+
+
+def upgrade_entries(env=None) -> list:
+    """The folder entries of the `upgrade` target (`upgrade_resolution`); a folder that cannot be guarded is left out."""
+    return upgrade_resolution(env)[0]
+
+
+def built_in(root, profile, profile_file=None, env=None, resolve=True) -> list:
     b = profiles.bundle_root(profile)
     state = profiles.state_dir(root, profile)
     state_rel = helpers.norm(str(state), root) or profiles.DEFAULT_STATE_DIR
@@ -52,6 +91,7 @@ def built_in(root, profile, profile_file=None) -> list:
         Target("gitattributes", [f"{b}/.gitattributes"], True),
         Target("register", [f"{b}/cards/REGISTER.md"], True),
         Target("state", [state_rel + "/"], True),
+        Target("upgrade", upgrade_entries(env) if resolve else [], True),  # last: the first closed target names a refusal (MW-105)
     ]
 
 
@@ -73,7 +113,7 @@ def engine_targets(root, profile) -> list:
     the profile; a profile target of the same name is ignored."""
     state = profiles.state_dir(root, profile)
     state_rel = helpers.norm(str(state), root) or profiles.DEFAULT_STATE_DIR
-    taken = {t.name for t in built_in(root, profile)}
+    taken = {t.name for t in built_in(root, profile, resolve=False)}  # names only: no folder is resolved (R260d C6)
     out = []
     for t in _default_raw():
         if not isinstance(t, dict) or not isinstance(t.get("name"), str) or t["name"] in taken:
@@ -97,7 +137,7 @@ def profile_targets(root, profile) -> list:
         profile.get("locks"), dict) else None
     defaults = engine_targets(root, profile)
     out = list(defaults)
-    taken = {t.name for t in built_in(root, profile)} | {t.name for t in defaults}
+    taken = {t.name for t in built_in(root, profile, resolve=False)} | {t.name for t in defaults}
     for t in raw if isinstance(raw, list) else []:
         if not isinstance(t, dict) or not isinstance(t.get("name"), str) or t["name"] in taken:
             continue
@@ -113,8 +153,8 @@ def profile_targets(root, profile) -> list:
     return out
 
 
-def targets(root, profile, profile_file=None) -> list:
-    return built_in(root, profile, profile_file) + profile_targets(root, profile)
+def targets(root, profile, profile_file=None, env=None, resolve=True) -> list:
+    return built_in(root, profile, profile_file, env, resolve) + profile_targets(root, profile)
 
 
 def lock_folder(root, profile) -> Path:
@@ -195,37 +235,37 @@ def _marker_state(path: Path, now) -> Optional[str]:
     return "open" if ok else "closed"
 
 
-def is_open(root, profile, name: str, now=None) -> bool:
+def _is_open(root, profile, name: str, defaults, now) -> bool:
     if name in NEVER_OPEN:
         return False
-    if name in default_open_names(root, profile):
+    if name in defaults:
         return not hold_closed(root, profile, name)  # the marker is the owner's close; no expiry
-    now = now or logs.now()
     states = [_marker_state(p, now) for p in _marker_files(root, profile, name)]
     return "closed" not in states and "open" in states  # MW-022: closed wins between the shared and the local marker
+
+
+def is_open(root, profile, name: str, now=None) -> bool:
+    return _is_open(root, profile, name, default_open_names(root, profile), now or logs.now())
+
+
+def core_targets(root, profile, profile_file=None, env=None, resolve=True) -> tuple:
+    """Every target with its `closed` flag read from the markers and the clock: the facts the pure core decides on.
+    `env` is the environment of the call (the upgrade folder is read from it; None is the process environment). `resolve`
+    False leaves the `upgrade` target with no entry: a caller that reads repo paths only (an absolute entry never matches one)."""
+    defaults, now = default_open_names(root, profile), logs.now()
+    return tuple(dataclasses.replace(t, closed=not _is_open(root, profile, t.name, defaults, now))
+                 for t in targets(root, profile, profile_file, env, resolve))
 
 
 def closed_target(root, profile, rel: Optional[str], profile_file=None) -> Optional[Target]:
     """The closed target that holds the repo path, or None."""
     if rel is None:
         return None
-    for t in targets(root, profile, profile_file):
-        if any(helpers.matches(rel, e) for e in t.entries) and not is_open(root, profile, t.name):
-            return t
-    return None
-
-
-def _glob_folder(entry: str) -> Optional[str]:
-    """The literal folder in front of a glob entry's first wildcard (`docs` for `docs/**/*.md`), "" for a glob at
-    the root, None for a slash-free glob (it matches in any folder)."""
-    if "/" not in entry.rstrip("/"):
-        return None
-    head = entry[:min(i for i, ch in enumerate(entry) if ch in "*?[")]
-    return head.rsplit("/", 1)[0] if "/" in head else ""
+    return core_lock.closed_target(core_targets(root, profile, profile_file, resolve=False), rel)
 
 
 def _file_in(root, rel: str, entry: str) -> Optional[str]:
-    """The first file on disk inside the folder `rel` that the entry matches, or None (`.git` is not read)."""
+    """The first file on disk inside the folder `rel` that the entry matches, or None (the git folder is not read)."""
     base = Path(root) / rel
     if not base.is_dir():
         return None
@@ -239,111 +279,19 @@ def _file_in(root, rel: str, entry: str) -> Optional[str]:
 
 
 def held_target(root, profile, rel: Optional[str], profile_file=None):
-    """(closed target, what shows it) when the path `rel` holds a closed target: the root holds every target; a
-    folder holds a literal entry below it, a glob whose literal folder is below it or is it, or a file on disk that
-    a glob entry matches. None otherwise (list item 2, R37 (a) H2)."""
-    if rel is None:
-        return None
-    fold = helpers._fold
-    for t in targets(root, profile, profile_file):
-        if is_open(root, profile, t.name):
-            continue
-        for raw in t.entries:
-            e = raw.strip().replace("\\", "/")
-            e = e[2:] if e.startswith("./") else e
-            if rel == ".":
-                return t, e.rstrip("/")
-            if not any(ch in e for ch in "*?["):
-                if fold(e.rstrip("/")).startswith(fold(rel) + "/"):
-                    return t, e.rstrip("/")
-                continue
-            folder = _glob_folder(e)
-            if folder is not None and (fold(folder) == fold(rel) or fold(folder).startswith(fold(rel) + "/")):
-                return t, e
-            hit = _file_in(root, rel, e)
-            if hit:
-                return t, hit
-    return None
-
-
-def _literal_of(entry: str) -> Optional[str]:
-    """The literal repo path an entry names: the entry itself, or a glob's literal folder; None for a slash-free
-    glob or a glob at the root."""
-    e = entry.strip().replace("\\", "/")
-    e = e[2:] if e.startswith("./") else e
-    if any(ch in e for ch in "*?["):
-        return _glob_folder(e) or None
-    return e.rstrip("/") or None
-
-
-def _reaches(glob_parts: list, parts: list) -> bool:
-    """True when a glob path's leading segments match a literal path's segments one by one (`mkway/engin?/x`
-    reaches `mkway/engine`); a `**` segment reaches anything below where it stands (remainder item 4, H14)."""
-    fold = helpers._fold
-    for k, seg in enumerate(parts):
-        if k >= len(glob_parts):
-            return False
-        if glob_parts[k] == "**":
-            return True
-        if not helpers.glob_re(fold(glob_parts[k])).fullmatch(fold(seg)):
-            return False
-    return True
+    """(closed target, what shows it) when the path `rel` holds a closed target (`core_lock.held_target`); the disk
+    read for a glob entry is `_file_in`."""
+    return core_lock.held_target(core_targets(root, profile, profile_file, resolve=False), rel, lambda r, e: _file_in(root, r, e))
 
 
 def glob_target(root, profile, rel: Optional[str], profile_file=None):
-    """(closed target, the path) when the glob path `rel` matches a closed target's literal path or one of its parent
-    folders (`mkway/*` matches `mkway/engine`; list item 5), or its leading segments match the target's segments one
-    by one, so it writes inside it (`mkway/engin?/gate_lock.py`; remainder item 4, R95 (4a)); None otherwise."""
-    if rel is None:
-        return None
-    for t in targets(root, profile, profile_file):
-        if is_open(root, profile, t.name):
-            continue
-        for entry in t.entries:
-            lit = _literal_of(entry)
-            parts = lit.split("/") if lit else []
-            for k in range(len(parts), 0, -1):
-                candidate = "/".join(parts[:k])
-                if helpers.matches(candidate, rel):
-                    return t, candidate
-            if parts and _reaches(rel.split("/"), parts):
-                return t, lit
-    return None
-
-
-_BEFORE = r"(?:^|(?<=[\s'\"/=:;,(\[{|&<>`]))"
-_AFTER = r"(?=$|[\s'\"/;,)\]}|&<>`*?\[])"  # a glob character is a boundary too (remainder item 4, M1)
+    """(closed target, the path) when the glob path `rel` reaches a closed target (`core_lock.glob_target`)."""
+    return core_lock.glob_target(core_targets(root, profile, profile_file, resolve=False), rel)
 
 
 def named_target(root, profile, text: str, profile_file=None):
-    """(closed target, the literal) when the command text names a closed target literally (list item 5, R43 (b);
-    R81, R81a; close-fix 5, R84): its repo path of two or more segments with a path boundary on both sides; or its
-    base name in a path position. A folder target's base name (`state`, `locks`, `engine`), a leading-dot file's
-    (`.gitignore`), an undotted file's (`run`) and a one-segment literal (`docs`) count only right after `/` or
-    `\\`, so a plain word never names a target; a dotted file's base name (`mkway.lock`) also counts after the start,
-    a quote or a space. The base name ends before a quote, a space, a separator (folders only) or the end. None
-    otherwise."""
-    flat = (text or "").replace("\\", "/")
-    flags = re.IGNORECASE if helpers.CASE_FOLD else 0
-    for t in targets(root, profile, profile_file):
-        if is_open(root, profile, t.name):
-            continue
-        for entry in t.entries:
-            lit = _literal_of(entry)
-            if not lit:
-                continue
-            if "/" in lit and re.search(_BEFORE + re.escape(lit) + _AFTER, flat, flags):  # close-fix 5: boundaries
-                return t, lit
-            base = lit.rsplit("/", 1)[-1]
-            folder = entry.rstrip().endswith("/") or any(ch in entry for ch in "*?[")
-            dotted = "." in base and not base.startswith(".")
-            if folder or not dotted or "/" not in lit:  # R81, R84: right after a separator only
-                pattern = r"/" + re.escape(base) + (r"(?=$|['\"\s/])" if folder else r"(?=$|['\"\s])")
-            else:
-                pattern = r"(?:^|[/'\"\s])" + re.escape(base) + r"(?=$|['\"\s])"
-            if re.search(pattern, flat, flags):
-                return t, lit
-    return None
+    """(closed target, the literal) when the command text names a closed target literally (`core_lock.named_target`)."""
+    return core_lock.named_target(core_targets(root, profile, profile_file), text)
 
 
 def open_locks(root, profile) -> list:
@@ -379,7 +327,7 @@ def _drop_local(root, profile, name: str) -> None:
 
 def set_lock(root, profile, name: str, state: str, minutes: float = 60) -> dict:
     """The owner's `mkway lock open|close <name>`."""
-    names = {t.name for t in targets(root, profile)}
+    names = {t.name for t in targets(root, profile, resolve=False)}
     if name in NEVER_OPEN:
         raise LockError(f"{name} is never open: only the engine's own commands write it")
     if name not in names:

@@ -6,6 +6,7 @@ import subprocess
 
 import pytest
 
+import _docs as docs
 from _engine import REPO, cli, task_root
 from _mw017 import session_run
 from test_install import clean_env, git, make_light_source, make_source, make_task, mkway
@@ -224,10 +225,9 @@ def test_register_changelog_version_keys_and_readme_name_the_card():
     register = (REPO / "cards" / "REGISTER.md").read_text(encoding="utf-8")
     assert re.search(r"^\| MW-026 \|.*`cards/MW-026-[a-z0-9-]+`", register, re.M)
     text = (REPO / "CHANGELOG.md").read_text(encoding="utf-8")
-    assert text.index("\n## 0.2.6\n") < text.index("\n## 0.2.1\n")
-    assert "MW-026" in text.split("\n## 0.2.6\n", 1)[1].split("\n## ", 1)[0]
+    assert "MW-026" in docs.changelog_section(text, "MW-026")
     assert list((REPO / "cards").glob("MW-026-*/CARD.md"))
-    assert (REPO / "VERSION").read_text(encoding="utf-8").strip() == "0.2.7"
+    docs.assert_version_file()
     keys = (REPO / "engine" / "KEYS.md").read_text(encoding="utf-8")
     assert re.search(r"^\| `state\.shared_dir` \|.*unset", keys, re.M)
     readme = " ".join((REPO / "README.md").read_text(encoding="utf-8").split())

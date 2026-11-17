@@ -38,7 +38,7 @@ tree, and the start block gives one reason when the vcs is none.
 | E7 | `detect_vcs` of an untracked folder two levels below the top of a sparse linked worktree | none | git; a folder in no work tree stays none | tests/test_mw028_lead_authors.py::test_detect_vcs_answers_git_for_a_root_below_the_top_of_a_sparse_linked_worktree |
 | E8 | the starter profile a first install writes at that root | `vcs` none | `vcs` git, the bundle `.gitignore` written | tests/test_mw028_lead_authors.py::test_a_first_install_below_the_top_writes_vcs_git_and_the_ignore_file |
 | E9 | the start block's vcs line when the profile says none | the bare words | one line with the reason: inside a git work tree, or in none | tests/test_mw028_lead_authors.py::test_the_start_block_says_in_one_line_why_vcs_is_none |
-| E10 | register, changelog, version | no word | register row, `## 0.2.5` above `## 0.2.2`, `VERSION` 0.2.5 | tests/test_mw028_lead_authors.py::test_register_changelog_version_and_card_name_the_card |
+| E10 | register, changelog, version | no word | register row, a line under the release that names the card, VERSION: see VERSION | tests/test_mw028_lead_authors.py::test_register_changelog_version_and_card_name_the_card |
 
 ## 8. Log
 
@@ -51,3 +51,4 @@ tree, and the start block gives one reason when the vcs is none.
 | 2026-11-11 | row changed: MW-017 test `test_a_lead_edit_of_any_other_path_is_lead_no_edit` expected a lead's write to the CARD.md of its own proposed card to be refused; the ruling makes that wrong, so the test opens the card first and the refusal is asserted after the open. Version pins of MW-016, MW-017, MW-018, MW-022, MW-023, MW-024, MW-025 changed `0.2.2` to `0.2.5` (README patch-release rule); README lead section and `engine/KEYS.md` `cards.approver` state the new rule | the commit that carries this line | reading, to confirm |
 | 2026-11-11 | open for the architect: the live refusal of the lead's ORDER.md (`no-open-card`) would also arise if the card's `Ordered by` cell stayed `owner` (a register with no such column, so the post step could not write it); not reproduced here | - | not established |
 | 2026-11-11 | whole suite, `python -m pytest`, term scan included | the commit that carries this line | 846 passed in 663 s (836 on the base, 10 new); no term-scan exception added |
+| 2026-11-12 | MW-040: row E10 named a release number or an old VERSION | the commit that carries this line | the row says «see VERSION» and «the release that names the card»; its test reads the VERSION file and finds the card's changelog line (`tests/_docs.py`), no release number is pinned |

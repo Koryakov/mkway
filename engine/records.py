@@ -24,6 +24,7 @@ import logs
 RECORDS = "records.jsonl"
 NONCES = "nonces"
 OK_LINE = re.compile(r"^mkway-ok (\S+) (.+) ([0-9a-f]{32})\s*$", re.M)
+FORCE_BY = ("owner", "orderer", "stale")  # MW-045: `by` of a release row the engine itself writes, never the `post` group
 SESSION_ENV = "CLAUDECODE"  # set by Claude Code in a session's shell; the owner's own terminal has none (C44)
 
 
@@ -64,9 +65,18 @@ def holders(state_dir, closed=None) -> dict:
             if any(h == who and card not in closed for card, h in held.items()):
                 continue
             held[value] = who
-        elif kind == "release" and value in held and (row.get("by") == "owner" or who == held[value]):
-            held.pop(value, None)  # only the holder or the owner's terminal frees a card
+        elif kind == "release" and value in held and (row.get("by") in FORCE_BY or who == held[value]):
+            held.pop(value, None)  # only the holder, the owner's terminal, or (MW-045) the engine frees a card
     return held
+
+
+def hold_time(state_dir, card, session) -> Optional[str]:
+    """The time text of the latest `take` of `card` by `session` (MW-045: the age of a hold), or None."""
+    found = None
+    for row in rows(state_dir):
+        if row.get("kind") == "take" and row.get("value") == card and row.get("session_id") == session:
+            found = row.get("time") if isinstance(row.get("time"), str) else found
+    return found
 
 
 def session_card(state_dir, session, closed=None) -> Optional[str]:
