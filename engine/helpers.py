@@ -115,6 +115,74 @@ def top_prefix(root) -> str:
     return ""
 
 
+# ---- a name git printed, read against the git top (MW-140) -----------------------------------------------------------------
+# Git names a file from the TOP of the work tree, never from the task root. `norm` reads a name a user or a tool WROTE
+# (relative to the cwd or the root); on a git name it invents an in-root name for a file that lies outside the root. A git
+# name goes through `from_top` instead: the root-relative name for a file under the root, an `Outside` for any other.
+
+@dataclass(frozen=True)
+class Outside:
+    """A git name that lies outside the task root, or that cannot be placed (fail closed). `name` is git's own top-relative
+    name. It is no `str`: it never equals an in-root name, and a caller that treats it as a path fails loudly."""
+    name: str
+
+    def __post_init__(self):
+        text = self.name if isinstance(self.name, str) else repr(self.name)
+        object.__setattr__(self, "name", text.encode("utf-8", "surrogateescape").decode("utf-8", "replace"))
+
+    @property
+    def text(self) -> str:
+        return f"outside the task root: {self.name}"
+
+
+_QUOTED = re.compile(r'^".*"$', re.S)
+_DRIVE_LEAD = re.compile(r"^[A-Za-z]:")
+_RAW_BYTE = re.compile("[\udc80-\udcff]")  # a byte that was not UTF-8, kept by `decode_git`
+
+
+def decode_git(data) -> str:
+    """The text of a git output: bytes as UTF-8 with an undecodable byte kept as a lone surrogate (so `from_top` finds it and
+    calls the name outside); a text a fake or a caller already decoded is returned as it is. Never the locale's code page."""
+    return data if isinstance(data, str) else bytes(data).decode("utf-8", "surrogateescape")
+
+
+def _unplaceable(name) -> bool:
+    """True for a git name the placement below cannot trust: not text, empty, a NUL, git's quoted form (`"a\\303\\251"`),
+    absolute, a `.` or `..` or empty segment, bytes that are not UTF-8; on Windows also a backslash or a drive."""
+    if not isinstance(name, str) or not name or "\0" in name:
+        return True
+    if _QUOTED.match(name) or name.startswith("/") or _RAW_BYTE.search(name):
+        return True
+    if CASE_FOLD and ("\\" in name or _DRIVE_LEAD.match(name)):
+        return True
+    return any(part in ("", ".", "..") for part in name.split("/"))
+
+
+def _same_segment(a: str, b: str) -> bool:
+    """Whole-segment equality, case-folded on Windows. A fold that changes the length (`ß` to `ss`) is no equality: NTFS
+    does not fold that way, so `straße` and `strasse` are two folders."""
+    return a == b or (CASE_FOLD and len(a) == len(b) and a.casefold() == b.casefold())
+
+
+def from_top(name, root, prefix=None):
+    """The root-relative posix name of the git name `name` (relative to the TOP of the work tree) when the file lies under
+    the task root, else an `Outside` carrying git's own name. `prefix` is the root's path below the top (`top_prefix`; it is
+    read from `root` when None); with prefix "" the root is the top and every name is inside as git gave it. Whole segments
+    only (`task/x2/f` is not under `task/x`), case-folded on Windows; a name that cannot be placed is outside (a gate that
+    cannot tell must refuse, never pass). Pure when `prefix` is given."""
+    if prefix is None:
+        prefix = top_prefix(root)
+    if _unplaceable(name):
+        return Outside(name)
+    below = [part for part in str(prefix).replace("\\", "/").split("/") if part]
+    if not below:
+        return name
+    parts = name.split("/")
+    if len(parts) > len(below) and all(_same_segment(a, b) for a, b in zip(parts, below)):
+        return "/".join(parts[len(below):])
+    return Outside(name)
+
+
 def _canon(path: str) -> str:
     """The real path in one comparable form: links, `..` and (on Windows) 8.3 short names resolved for the part that
     exists, backslashes turned into slashes, case-folded on Windows (MW-103: moved here from the lead gate, MW-105)."""

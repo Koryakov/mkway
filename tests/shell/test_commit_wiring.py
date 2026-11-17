@@ -9,7 +9,8 @@ import dispatch
 
 REASONS = {"file-not-in-card", "junk-file-staged", "ignored-file-staged", "data-file-staged", "file-too-large",
            "commit-message-card", "commit-unreadable", "register-tampered", "rule-without-test",
-           "verdict-unproven", "verdict-stale"}  # from the card rows; verdict-unproven by MW-102 (R254); verdict-stale by MW-117 (MW117-D2)
+           "verdict-unproven", "verdict-stale",
+           "file-outside-root"}  # from the card rows; verdict-unproven by MW-102 (R254); verdict-stale by MW-117 (MW117-D2); file-outside-root by MW-140 (R358)
 TESTS_OFF = {"commit_tests": {"on": False}}  # the test gate runs after `commit_files` in the same group
 
 

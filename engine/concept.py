@@ -65,6 +65,7 @@ REASONS = {
     "close-by-holder": Row("K6", None, None, 2),  # cardtool.py; gap: no way-out test yet; who may close the card
     "close-not-orderer": Row("K6", None, None, 2),  # cardtool.py; gap: no way-out test yet; who may close the card
     "file-not-in-card": Row("K6", None, "tests/core/test_mw107_ways_out_core.py::test_the_way_out_of_each_refusal_works", None),  # core.py; way out proved by card MW-107, reading the owner table
+    "file-outside-root": Row("K1", None, "tests/shell/test_mw140_outside_shell.py::test_the_way_out_of_file_outside_root_is_to_unstage_the_file", None),  # core.py; a file outside the task root is no file of any card (MW-140): git names it from the top, the commit is refused; way out proved by card MW-140
     "lead-accept-none": Row("K6", None, None, 2),  # leads.py; gap: no way-out test yet; the lead of a card is one session
     "lead-accept-stale": Row("K6", None, None, 2),  # leads.py; gap: no way-out test yet; the lead of a card is one session
     "lead-ambiguous": Row("K6", None, None, 2),  # leads.py; gap: no way-out test yet; the lead of a card is one session

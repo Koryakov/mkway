@@ -663,6 +663,20 @@ def file_not_in_card_orderer_commit(p):
         (p.root / "src" / "a.py").write_bytes(old)
 
 
+@refusal("commit_files", "file-outside-root")
+def file_outside_root_commit(p):
+    """MW-140: the task root lies below the git top (`task/T1`); a new file of the top itself is staged and committed. git
+    names it from the top, so it is no file of any card of this root."""
+    rel = "outside_root_file.txt"
+    (p.top / rel).write_text("x\n", encoding="utf-8")
+    p.git("add", "-f", "--", rel, cwd=p.top)
+    try:
+        yield commit()
+    finally:
+        p.git("rm", "--cached", "-q", "-f", "--", rel, check=False, cwd=p.top)
+        (p.top / rel).unlink()
+
+
 @refusal("commit_files", "junk-file-staged")
 def junk_file_staged(p):
     with staged(p, {"src/j.pyc": b"\0"}):

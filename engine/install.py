@@ -697,15 +697,21 @@ def state_outside_root_lines(root: Path, profile) -> list:
 
 def staged_outside_lines(root: Path, profile) -> list:
     """MW-043: `staged files: N outside every open card's Paths` for a git root with N > 0 staged files outside the
-    Paths of every open card; no line otherwise, and none when git or the register cannot be read."""
+    Paths of every open card; no line otherwise, and none when git or the register cannot be read. MW-140: then one line
+    `outside the task root: <name>` for each staged file that lies outside the task root (named as git names it from the
+    top)."""
     if profiles.vcs(profile) != "git":
         return []
     import gate_commit
     try:
+        outside = gate_commit.outside_lines(gate_commit.staged_outside_root(root))
+    except Exception:
+        outside = []
+    try:
         found = gate_commit.staged_outside(root, profile)
     except Exception:
-        return []
-    return [f"staged files: {len(found)} outside every open card's Paths"] if found else []
+        return outside
+    return ([f"staged files: {len(found)} outside every open card's Paths"] if found else []) + outside
 
 
 def check(root: Path, *, profile_arg=None, env=None) -> tuple:

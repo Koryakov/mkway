@@ -36,11 +36,12 @@ ORDERER_RULE = ("an orderer may commit only the folders of cards it ordered plus
 ORDERER_OWN = ("card.md", "order.md")  # MW-053: the files of an ordered card's folder that are always the orderer's
 ORDERER_ROLE = "orderer"  # MW-107: the role the owner table gives the kinds an orderer writes and commits
 OWNER_NOTE = "Owner table:"  # MW-107: the owner table's sentence for a refused file follows this label
-REASONS = ("file-not-in-card", "junk-file-staged", "ignored-file-staged", "data-file-staged", "file-too-large",
+REASONS = ("file-not-in-card", "file-outside-root", "junk-file-staged", "ignored-file-staged", "data-file-staged", "file-too-large",
            "commit-message-card", "commit-unreadable", "register-tampered", "rule-without-test", "verdict-unproven",
            "verdict-stale")
 
 ALLOW, REFUSE, ALLOW_LINE = "allow", "refuse", "allow-with-line"
+REASON_OUTSIDE = "file-outside-root"  # MW-140
 
 _RERUN = "run it again from the repository"
 _TAKEN_TEXT = "the files this commit takes could not be read from git, so it could not be checked; " + _RERUN
@@ -109,6 +110,7 @@ class CommitFacts:
     own: frozenset = frozenset()  # MW-107: the taken paths this session's own writable set holds (its owner-table rows)
     notes: Mapping = field(default_factory=dict)  # MW-107: {taken path: the owner table's sentence}, shown after a refusal
     unproven: Mapping = field(default_factory=dict)  # MW-102: {verdict file path: ((node, why), ...)}, the rows the proof refuses
+    outside: tuple = ()  # MW-140: ((status letter, name as git gives it from the TOP, source), ...) of the files the commit takes that lie outside the task root; `taken` holds the in-root files only
 
 
 @dataclass(frozen=True)
@@ -197,6 +199,7 @@ def commit_record(session, tree, taken):
 
 def decide_commit(facts: Facts) -> Verdict:
     """The commit gate (entry `commit_files`): refuses a `git commit` of a shell command that holds a file outside the
+    task root (`file-outside-root`, MW-140: before any card rule), a file outside the
     open card's Paths (`file-not-in-card`), junk, an ignored, a data or an oversized file, a message that does not name
     the card, a rule card with no test, and fails closed (`commit-unreadable`, `register-tampered`) when it cannot
     read the commit. Everything else is allowed."""
@@ -282,6 +285,38 @@ def _way_out(commit: CommitFacts, rels: list) -> str:
     return f"unstage them with `git restore --staged {' '.join(dict.fromkeys(rels))}`"
 
 
+def _top_spec(name: str) -> str:
+    """The pathspec of a name git gave from the top, as `git restore` reads it from any folder of the work tree (`:/<name>`),
+    quoted when the name holds a character the shell reads."""
+    spec = ":/" + name
+    if re.fullmatch(r"[\w./:@%+=,~-]+", spec):
+        return spec
+    return f'"{spec}"' if "'" in spec else f"'{spec}'"
+
+
+def _outside(commit: CommitFacts) -> Verdict:
+    """MW-140: a commit that takes a file outside the task root is refused `file-outside-root`, whatever the card, the exempt
+    entries, the owner table or the session's own set say. The text names each file as git names it (from the top of the
+    repository), says it lies outside the task root and names the ways out that work: keep the file inside the root, take it
+    out of this commit, or the owner commits it in their own terminal."""
+    rows = list(dict.fromkeys(commit.outside))
+    names = list(dict.fromkeys(name for _status, name, _source in rows))
+    named = [name for _status, name, source in rows if source == "work"]
+    staged = [name for _status, name, source in rows if source == "index"]
+    one = len(names) == 1
+    it = "it" if one else "them"
+    ways = ["keep the file inside the task root" if one else "keep the files inside the task root"]
+    if named:
+        ways.append(f"leave {it} out of the paths after `--`" if commit.paths else
+                    "commit without `-a` and name your own files after `--`")
+    if staged:
+        ways.append(f"take {it} out of this commit with `git restore --staged "
+                    f"{' '.join(_top_spec(name) for name in dict.fromkeys(staged))}`")
+    ways.append("the owner commits " + ("it" if one else "them") + " in their own terminal")
+    return refuse(REASON_OUTSIDE, f"{_list(names)} {'lies' if one else 'lie'} outside the task root (git names {it} from the "
+                                  f"top of the repository), so this commit cannot take {it}; ways out: {'; or '.join(ways)}")
+
+
 def _always(facts: Facts, rel: str) -> bool:
     """The files no rule of the card's Paths applies to: the card's own folder, the register, the ledger folder, and
     the profile's `paths.exempt`."""
@@ -345,6 +380,8 @@ def _commit(facts: Facts, commit: CommitFacts):
         if problem:
             return refuse("register-tampered", f"{problem}; no commit is checked until the owner checks it: "
                                                f"{facts.owner_fix}")
+    if commit.outside:  # MW-140: before any card, exempt, own-set or verdict rule: those judge in-root names only
+        return _outside(commit)
     scope = _verdict_scope(facts, taken)
     if scope is not None:
         return scope

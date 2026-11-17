@@ -89,6 +89,7 @@ keeps this file and the register in step.
 - MW-131: the commit gate finds a card's own red record in the whole history of HEAD, however many unrelated commits followed the red commit
 - MW-132: a builder holding an open card never ends a turn silently: at its first stop the engine writes its last message into the orderer's inbox and blocks once, asking only for the ping line
 - MW-133: release 0.3.0: clean card paths, raise VERSION
+- MW-140: A file outside the task root is outside: git's names are read against the git top
 - MW-139: the refusal for a red the take record does not hold names the route that works: release the card, take it again
 - MW-135: the commit gate's refusal of a red test that exists at HEAD and was green there says so and names the two ways out, not the red-first commit
 - MW-137: the lead that ordered an open card re-records its Paths: mkway card paths --add and --remove, the same checks as the first open, never the holder

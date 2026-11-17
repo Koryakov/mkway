@@ -18,6 +18,12 @@ record of who wrote a file; a ride-in is stopped by the card's Paths and by one 
 card alone (the shell passes each ordered card's verdict path as a fact), and a commit that takes it runs the close's row proof
 on the content the commit takes (refusal `verdict-unproven`); as at close, no checker or `cards.verdicts: off` skips the proof.
 
+MW-140: git names every file from the TOP of the repository, so each name it prints goes through `helpers.from_top`: the
+root-relative name for a file under the task root, a `helpers.Outside` for any other. `taken` keeps the outside rows, the
+shell moves them to `CommitFacts.outside` and reads nothing else for them (no ignore, size, owner or verdict read), and the
+core refuses the commit `file-outside-root`. The start line and `mkway check` name the staged outside files
+(`staged_outside_root`, `outside_lines`).
+
 The junk patterns, the data patterns and the size limit are profile keys with defaults (`settings`); no task name and no
 natural-language word is in this file. The owner's terminal runs no hook, so it is not gated.
 """
@@ -258,6 +264,10 @@ def _commit_facts(ctx, profile, facts: core.CommitFacts, commit, ordered=()) -> 
     if taken is None:
         return dataclasses.replace(facts, taken=core.Unread())
     taken = tuple(taken)
+    outside = tuple((status, rel.name, source) for status, rel, source in taken if isinstance(rel, helpers.Outside))
+    if outside:  # MW-140: the core refuses first; no ignore, size, owner or verdict read is made for a name outside the root
+        return dataclasses.replace(facts, taken=tuple(row for row in taken if not isinstance(row[1], helpers.Outside)),
+                                   outside=outside)
     try:
         unproven = _unproven(ctx, profile, ordered, taken)
     except (*_READ_ERRORS, cardtool.CardError) as exc:  # a verdict file that cannot be read is no file to let through
@@ -340,13 +350,14 @@ def _verdict_text(ctx, rel: str, source: str) -> str:
 
 # ---- the reads of git -------------------------------------------------------------------------------------------------------
 
-def _name_status(norm, folder, *args):
+def _name_status(norm, folder, *args, utf8=False):
     """[(status letter, path)] of a `git diff --name-status -z` read, each path through `norm` (a path it answers None
-    for is left out); None when git does not answer 0."""
-    proc = runner.git(folder, *args)
+    for is left out; one it answers with a `helpers.Outside` stays, as it is); None when git does not answer 0. `utf8`
+    reads the names as UTF-8 bytes (MW-140), else as the locale text, as the test gate does."""
+    proc = runner.git(folder, *args, text=not utf8, config=runner.DIFF_NAMES)  # MW-140: the name form is pinned
     if proc.returncode != 0:
         return None
-    parts = proc.stdout.split("\0")
+    parts = helpers.decode_git(proc.stdout).split("\0")
     out = []
     for i in range(0, len(parts) - 1, 2):
         rel = norm(parts[i + 1])
@@ -359,38 +370,41 @@ def _has_head(folder) -> bool:
     return runner.git(folder, "rev-parse", "--verify", "-q", "HEAD").returncode == 0
 
 
-def _tracked_changes(norm, folder, specs=()):
+def _tracked_changes(norm, folder, specs=(), utf8=False):
     """The tracked changes against HEAD (with no HEAD yet, the index), limited to `specs` when given. A file git does
     not know (untracked, not staged) is never in the list, as git commits none."""
     tail = ["--", *specs] if specs else []
     if _has_head(folder):
-        return _name_status(norm, folder, "diff", "--name-status", "--no-renames", "-z", "HEAD", *tail)
-    return _name_status(norm, folder, "diff", "--cached", "--name-status", "--no-renames", "-z", *tail)
+        return _name_status(norm, folder, "diff", "--name-status", "--no-renames", "-z", "HEAD", *tail, utf8=utf8)
+    return _name_status(norm, folder, "diff", "--cached", "--name-status", "--no-renames", "-z", *tail, utf8=utf8)
 
 
-def taken(norm, folder, commit):
+def taken(norm, folder, commit, utf8=False):
     """[(status, path, source)] the commit would take (see `core.combine`), paths through `norm`: `commit_files` passes
-    its path normaliser (task-root paths), `commit_tests` the identity (repository paths). One reader for both gates (card
-    MW-060). None when git cannot tell. A message-only amend (`core.message_only_amend`) takes no files."""
+    a reader of git's names against the git top (`helpers.from_top`: task-root paths, and an `Outside` for a file outside
+    the root, MW-140), `commit_tests` the identity (repository paths). One reader for both gates (card MW-060). None when
+    git cannot tell. A message-only amend (`core.message_only_amend`) takes no files."""
     if core.message_only_amend(commit):
         return []
     if commit.all:  # git refuses `-a` with paths; the wider reading is the safe one
-        named = _tracked_changes(norm, folder)
+        named = _tracked_changes(norm, folder, utf8=utf8)
     elif commit.paths:
-        named = _tracked_changes(norm, folder, commit.paths)
+        named = _tracked_changes(norm, folder, commit.paths, utf8=utf8)
     else:
         named = []
     if named is None:
         return None
     if commit.paths and not commit.all and not commit.include:
         return core.combine(commit, named, [])
-    staged = _name_status(norm, folder, "diff", "--cached", "--name-status", "--no-renames", "-z")
+    staged = _name_status(norm, folder, "diff", "--cached", "--name-status", "--no-renames", "-z", utf8=utf8)
     return None if staged is None else core.combine(commit, named, staged)
 
 
 def _taken(ctx, folder, commit):
-    """`taken` for the file gate: paths relative to the task root."""
-    return taken(ctx.norm, folder, commit)
+    """`taken` for the file gate: paths relative to the task root, git's names read against the git top (MW-140): a file
+    outside the root comes back as a `helpers.Outside`, never as a made-up in-root name."""
+    prefix = helpers.top_prefix(ctx.root)
+    return taken(lambda name: helpers.from_top(name, ctx.root, prefix), folder, commit, utf8=True)
 
 
 def _ignored(ctx, rels: list):
@@ -399,10 +413,10 @@ def _ignored(ctx, rels: list):
     if not rels:
         return set()
     proc = runner.run(runner.GIT + ["-C", str(ctx.root), "check-ignore", "--no-index", "-z", "--stdin"],
-                      input="\0".join(rels) + "\0", capture_output=True, text=True, timeout=runner.GIT_TIMEOUT)
+                      input=("\0".join(rels) + "\0").encode("utf-8"), capture_output=True, timeout=runner.GIT_TIMEOUT)
     if proc.returncode not in (0, 1):
         return None
-    return {x for x in proc.stdout.split("\0") if x}
+    return {x for x in helpers.decode_git(proc.stdout).split("\0") if x}
 
 
 def _sizes(ctx, rows: list):
@@ -412,11 +426,11 @@ def _sizes(ctx, rows: list):
     index = [rel for rel, source in rows if source == "index"]
     if index:
         proc = runner.run(runner.GIT + ["-C", str(ctx.root), "cat-file", "--batch-check"],
-                          input="".join(f":./{rel}\n" for rel in index), capture_output=True, text=True,
+                          input="".join(f":./{rel}\n" for rel in index).encode("utf-8"), capture_output=True,
                           timeout=runner.GIT_TIMEOUT)
         if proc.returncode != 0:
             return None
-        for rel, line in zip(index, proc.stdout.splitlines()):
+        for rel, line in zip(index, helpers.decode_git(proc.stdout).split("\n")):
             parts = line.split()
             if len(parts) == 3 and parts[1] == "blob" and parts[2].isdigit():
                 sizes[rel] = int(parts[2])
@@ -438,12 +452,49 @@ def _exempt(norm, root, profile, row, rel) -> bool:
     return any(helpers.matches(rel, e) for e in entries if e)
 
 
+OUTSIDE_SHOWN = 5  # outside files named one by one in a list of lines; the rest are counted
+
+
+def _index_names(root, prefix):
+    """(in-root names, outside names as git gives them) of the files staged in the root's index, each git name read against
+    the git top (MW-140); None when git does not answer 0."""
+    proc = runner.git(root, "diff", "--cached", "--name-status", "--no-renames", "-z", text=False, config=runner.DIFF_NAMES)
+    if proc.returncode != 0:
+        return None
+    parts = helpers.decode_git(proc.stdout).split("\0")
+    names = [helpers.from_top(parts[i + 1], root, prefix) for i in range(0, len(parts) - 1, 2)]
+    return ([n for n in names if not isinstance(n, helpers.Outside)],
+            list(dict.fromkeys(n.name for n in names if isinstance(n, helpers.Outside))))
+
+
+def staged_outside_root(root):
+    """MW-140: the names, as git gives them from the top, of the files staged in the root's index that lie OUTSIDE the task
+    root, for the start line and `mkway check` (a line, never a refusal). None when git cannot be read."""
+    root = Path(root)
+    try:
+        found = _index_names(root, helpers.top_prefix(root))
+    except (OSError, ValueError, runner.Refused, runner.SubprocessError):
+        return None
+    return None if found is None else found[1]
+
+
+def outside_lines(names) -> list:
+    """MW-140: one line `outside the task root: <name>` for each of the first OUTSIDE_SHOWN names, then one line that counts
+    the rest. No line for none."""
+    names = list(names or [])
+    out = [helpers.Outside(name).text for name in names[:OUTSIDE_SHOWN]]
+    if len(names) > OUTSIDE_SHOWN:
+        out.append(f"outside the task root: {len(names) - OUTSIDE_SHOWN} more")
+    return out
+
+
 def staged_outside(root, profile, row=None):
     """MW-043: the repo paths staged in the root's index that lie outside a card's Paths, for the start block and
     `mkway check`; a line there, never a refusal. `row` is a register row: the files outside that card's Paths (a
     card that is not open leaves every file outside). With no row: the files outside the Paths of every open card
     (no open card leaves every file outside; open cards with no Paths restrict nothing). The files no card rule
-    applies to are not counted. None when git or the register cannot be read."""
+    applies to are not counted. MW-140: a file outside the task root is no file of any card, so it is not counted here
+    (`staged_outside_root` names it). None when git or the register cannot be read."""
     root = Path(root)
     prefix = helpers.top_prefix(root)
 
@@ -451,11 +502,10 @@ def staged_outside(root, profile, row=None):
         return helpers.norm(path, root, top_prefix=prefix)
 
     try:
-        proc = runner.git(root, "diff", "--cached", "--name-status", "--no-renames", "-z")
-        if proc.returncode != 0:
+        found = _index_names(root, prefix)
+        if found is None:
             return None
-        parts = proc.stdout.split("\0")
-        staged = [rel for rel in (norm(parts[i + 1]) for i in range(0, len(parts) - 1, 2)) if rel is not None]
+        staged = found[0]
         rows = [r for r in register.read(root, profile)] if row is None else [row]
     except (OSError, ValueError, register.RegisterError, runner.Refused, runner.SubprocessError):
         return None

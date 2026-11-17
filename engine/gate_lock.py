@@ -346,10 +346,10 @@ class Reader:
 
     def fact_staged(self, i):
         def read():
-            proc = runner.git(self.ctx.root, "diff", "--cached", "--name-only")
+            proc = runner.git(self.ctx.root, "diff", "--cached", "--name-only", "--no-renames", "-z", text=False, config=runner.DIFF_NAMES)
             if proc.returncode != 0:  # list item 3: a failed read refuses, never an empty list
                 return [], f"git exit {proc.returncode}"
-            return [self.ctx.norm(p) for p in proc.stdout.splitlines() if p.strip()], None
+            return _in_root(self.ctx, proc.stdout), None
         return self._names(read)
 
     def fact_index(self, i, every):
@@ -420,19 +420,30 @@ class Reader:
         return (profiles.owner_ask(self.profile)["dir"], f"{profiles.bundle_root(self.profile)}/{ledger.LEDGER_DIR}")
 
 
+def _in_root(ctx, stdout) -> list:
+    """The task-root names of a NUL-separated list of the names git printed (`-z`, so none is quoted), each read against the
+    git top (MW-140). A name outside the root is left out HERE ON PURPOSE: it is never matched against the task's lock
+    targets, and the commit gate refuses it (`file-outside-root`); a name git printed from the top is never read as an
+    in-root name of the same text."""
+    prefix = helpers.top_prefix(ctx.root)
+    found = (helpers.from_top(name, ctx.root, prefix) for name in helpers.decode_git(stdout).split("\0") if name)
+    return [name for name in found if not isinstance(name, helpers.Outside)]
+
+
 def _expand(ctx, folder, specs: list):
     """(repo paths, problem): the files a `git commit -- <specs>` takes, from `folder`. With a HEAD, the tracked
     files that differ from it (the commit takes their working-tree content); with no HEAD yet, the index. A git exit
-    that is not 0 is a problem, never an empty list."""
-    proc = runner.git(folder, "diff", "--name-only", "--no-renames", "HEAD", "--", *specs)
+    that is not 0 is a problem, never an empty list. The names are the in-root ones (`_in_root`)."""
+    proc = runner.git(folder, "diff", "--name-only", "--no-renames", "-z", "HEAD", "--", *specs, text=False,
+                      config=runner.DIFF_NAMES)
     if proc.returncode != 0:
         head = runner.git(folder, "rev-parse", "--verify", "-q", "HEAD")
         if head.returncode == 0:
             return [], f"git exit {proc.returncode}"
-        proc = runner.git(folder, "ls-files", "--full-name", "--", *specs)
+        proc = runner.git(folder, "ls-files", "--full-name", "-z", "--", *specs, text=False)
         if proc.returncode != 0:
             return [], f"git exit {proc.returncode}"
-    return [ctx.norm(p) for p in proc.stdout.splitlines() if p.strip()], None
+    return _in_root(ctx, proc.stdout), None
 
 
 def _index_names(ctx, every: bool):
@@ -440,16 +451,18 @@ def _index_names(ctx, every: bool):
     names and the tracked changes, which are the tracked files that differ from HEAD, one read; with no HEAD yet,
     the index. A git exit that is not 0 is a problem; under `-a` the one exception is no HEAD, shown by
     `rev-parse --verify HEAD`, as in `_expand` (close-fix 9, A-L2)."""
-    proc = runner.git(ctx.root, "diff", "--name-only", "--no-renames", "HEAD") if every else None
+    proc = runner.git(ctx.root, "diff", "--name-only", "--no-renames", "-z", "HEAD", text=False,
+                      config=runner.DIFF_NAMES) if every else None
     if proc is not None and proc.returncode != 0:
         head = runner.git(ctx.root, "rev-parse", "--verify", "-q", "HEAD")
         if head.returncode == 0:
             return [], f"git exit {proc.returncode}"
     if proc is None or proc.returncode != 0:
-        proc = runner.git(ctx.root, "diff", "--cached", "--name-only", "--no-renames")
+        proc = runner.git(ctx.root, "diff", "--cached", "--name-only", "--no-renames", "-z", text=False,
+                          config=runner.DIFF_NAMES)
         if proc.returncode != 0:
             return [], f"git exit {proc.returncode}"
-    return [ctx.norm(p) for p in proc.stdout.splitlines() if p.strip()], None
+    return _in_root(ctx, proc.stdout), None
 
 
 def remind(event, ctx):

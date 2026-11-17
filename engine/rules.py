@@ -132,10 +132,12 @@ def last_green_tree(root, profile, test: str, cache=None):
         cache.update(gate_commit_tests.trees_of_keys(root, keys))
         cache[None] = None
     named = cache
+    prefix = helpers.top_prefix(root)  # MW-140: a tree is the tree of the git TOP; the test path is the root's, so it sits below the prefix
+    where = f"{prefix}/{test}" if prefix else test
     for key in keys:
         tree = named.get(key, key)
         try:
-            if runner.git(root, "cat-file", "-e", f"{tree}:{test}").returncode == 0:
+            if runner.git(root, "cat-file", "-e", f"{tree}:{where}").returncode == 0:
                 return tree
         except (OSError, runner.TimeoutExpired, ValueError, runner.Refused):
             return None

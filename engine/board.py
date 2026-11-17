@@ -135,24 +135,34 @@ def agent_failed_lines(refusal_rows, agent_rows) -> list:
 # ---- the readers --------------------------------------------------------------------------------------------------------
 
 def uncommitted_files(root) -> list:
-    """The repository paths git reports as changed or untracked below `root`, in git's order; [] when git can not be read."""
+    """The files git reports as changed or untracked, in git's order; [] when git can not be read. Git names a file from the
+    top of the work tree (MW-140): a file under `root` is its root-relative path (a `str`); a file outside the root, or a name
+    that cannot be placed, is a `helpers.Outside` carrying git's own name, never an in-root name of the same text."""
     import helpers
     import runner
     root = Path(root)
     try:
-        proc = runner.git(root, "status", "--porcelain=v1", "-z", "-uall", "--no-renames")
+        proc = runner.git(root, "status", "--porcelain=v1", "-z", "-uall", "--no-renames", text=False)
         if proc.returncode != 0:
             return []
         prefix = helpers.top_prefix(root)
         out = []
-        for entry in proc.stdout.split("\0"):
+        for entry in helpers.decode_git(proc.stdout).split("\0"):
             if len(entry) > 3:
-                rel = helpers.norm(entry[3:], root, top_prefix=prefix)
-                if rel is not None:
-                    out.append(rel)
+                out.append(helpers.from_top(entry[3:], root, prefix))
         return out
     except Exception:
         return []
+
+
+def outside_line(names) -> list:
+    """MW-140: `outside the task root: <name>, ...` as one line for the uncommitted files outside the root (at most SHOWN
+    named, the rest counted); no line for none. Such a file is never a card's file and never left out of the board."""
+    names = list(dict.fromkeys(names))
+    if not names:
+        return []
+    shown = ", ".join(names[:SHOWN]) + (f" and {len(names) - SHOWN} more" if len(names) > SHOWN else "")
+    return [f"outside the task root: {shown}"]
 
 
 def agent_and_failure_rows(state) -> tuple:
@@ -194,13 +204,18 @@ def lines(root, profile, now=None) -> list:
         ended = set(cardtool.stale_holders(root, profile, held, now=now))
         ordered = {r["id"]: r.get(register.ORDERED) or register.OWNER for r in open_rows}
         files = {r["id"]: [] for r in open_rows}
+        outside = []
         if profile.get("vcs") == "git" and open_rows:
             for rel in uncommitted_files(root):
+                if isinstance(rel, helpers.Outside):  # MW-140: git's own name, matched against no card
+                    outside.append(rel.name)
+                    continue
                 for r in open_rows:
                     if any(helpers.matches(rel, e) for e in cardtool.paths_set(r.get("paths", ""))):
                         files[r["id"]].append(rel)
                         break
         out += uncommitted_lines(files, held, ordered, ended)
+        out += outside_line(outside)
         rows = leads.all_rows(shared)
         out += no_done_lines([(r["id"], held[r["id"]], records.hold_time(state, r["id"], held[r["id"]]))
                               for r in open_rows], rows)

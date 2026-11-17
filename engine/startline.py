@@ -312,23 +312,29 @@ def _card_lines(root: Path, p, session) -> list:
 
 def _staged_lines(root: Path, p, session) -> list:
     """MW-043: `staged outside your card: N` when this session holds an open card and N > 0 files are staged outside
-    its Paths. A line only, never a refusal; a read that fails adds no line: the start block never fails here."""
+    its Paths. MW-140: then one line `outside the task root: <name>` for each staged file that lies outside the task root
+    (named as git names it from the top), whatever card the session holds. Lines only, never a refusal; a read that fails
+    adds no line: the start block never fails here."""
     import gate_commit
     import records
     import register
     if p.get("vcs") != "git":
         return []
     try:
+        outside = gate_commit.outside_lines(gate_commit.staged_outside_root(root))
+    except Exception:
+        outside = []
+    try:
         state = profiles.state_dir(root, p)
         rows = register.read(root, p)
         mine = records.session_card(state, session, {r["id"] for r in rows if r.get("status") == "closed"})
         row = register.find(rows, mine) if mine else None
         if not row or row.get("status") != "open":
-            return []
+            return outside
         found = gate_commit.staged_outside(root, p, row)
     except Exception:
-        return []
-    return [f"staged outside your card: {len(found)}"] if found else []
+        return outside
+    return ([f"staged outside your card: {len(found)}"] if found else []) + outside
 
 
 def _agent_lines(root: Path, p, session) -> list:

@@ -119,6 +119,7 @@
 | MW-131 | the commit gate finds a card's own red record in the whole history of HEAD, however many unrelated commits followed the red commit | proposed | `cards/MW-131-own-record-search` |
 | MW-132 | a builder holding an open card never ends a turn silently: at its first stop the engine writes its last message into the orderer's inbox and blocks once, asking only for the ping line | proposed | `cards/MW-132-no-silent-turn-end` |
 | MW-133 | release 0.3.0: clean card paths, raise VERSION | proposed | `cards/MW-133-release-030` |
+| MW-140 | A file outside the task root is outside: git's names are read against the git top | proposed | `cards/MW-140-git-names-from-top` |
 | MW-139 | the refusal for a red the take record does not hold names the route that works: release the card, take it again | proposed | `cards/MW-139-take-wayout-text` |
 | MW-135 | the commit gate's refusal of a red test that exists at HEAD and was green there says so and names the two ways out, not the red-first commit | proposed | `cards/MW-135-red-wayout-text` |
 | MW-137 | the lead that ordered an open card re-records its Paths: mkway card paths --add and --remove, the same checks as the first open, never the holder | proposed | `cards/MW-137-lead-paths` |

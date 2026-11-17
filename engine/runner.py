@@ -60,10 +60,17 @@ def popen(argv: list, *, python: Optional[str] = None, **kwargs) -> subprocess.P
 GIT_TIMEOUT = 10  # list item 11 (R44 row 4): the default limit; new cards set per-call limits
 
 
-def git(cwd, *args, timeout: float = 10, text: bool = True) -> subprocess.CompletedProcess:
-    """`git --no-optional-locks -C <cwd> <args>`, output captured; `subprocess.TimeoutExpired` after `timeout`
-    seconds (10 by default, GIT_TIMEOUT)."""
-    return run(GIT + ["-C", str(cwd), *args], capture_output=True, text=text, timeout=timeout)
+DIFF_NAMES = ("diff.relative=false",)  # MW-140: the pin of a `git diff` that prints file names, see `git(config=...)`
+
+
+def git(cwd, *args, timeout: float = 10, text: bool = True, config: tuple = ()) -> subprocess.CompletedProcess:
+    """`git --no-optional-locks -C <cwd> [-c <key=value> ...] <args>`, output captured; `subprocess.TimeoutExpired` after
+    `timeout` seconds (10 by default, GIT_TIMEOUT). `config` pins settings for this one call (`-c` wins over the repository's
+    and the user's config): a `git diff` that prints names passes `DIFF_NAMES`, because `diff.relative=true` makes it print
+    names relative to the current folder and leave out every file outside that folder (MW-140). The `-c` pairs come before
+    the subcommand, so `args` keeps its first word."""
+    pins = [word for setting in config for word in ("-c", setting)]
+    return run(GIT + ["-C", str(cwd), *pins, *args], capture_output=True, text=text, timeout=timeout)
 
 
 # ---- stopping a process tree -------------------------------------------------------------------------------------------

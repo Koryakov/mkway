@@ -526,6 +526,13 @@ gated there). The gate judges a commit by what git will put in it, form by form:
 default when paths are named) takes the named paths alone; `-i -- <paths>` takes the staged list plus the named paths;
 a plain commit takes the staged list; `-a` takes the staged list plus every modified tracked file; `--amend` follows
 the same rule and adds nothing. It refuses, in this order, naming the files and the way out:
+0. **Files inside the task root only** (`file-outside-root`). Git names every file from the top of the repository,
+   so when the task root lies below the top, a file of the top (or of a sibling folder) is OUTSIDE the root. It is
+   named as git names it and is never matched against the card's Paths, the exempt entries, the owner table, the
+   session's own writable set or the lock targets; a name that cannot be placed counts as outside. A rename across
+   the root's border is two names, and either side outside refuses. Way out: keep the file inside the task root,
+   or take it out of this commit (`git restore --staged :/<name>`, or leave it out of the paths after `--`), or the
+   owner commits it in their own terminal. With the root at the top of the repository nothing changes.
 1. **Right files only** (`file-not-in-card`). Every file the commit takes must lie inside the Paths of the session's
    open card, or be always allowed: the card's own folder, the register, `<bundle.root>/ledger/` and `paths.exempt`. An
    empty Paths is no file rule; a session with no open card (none taken, or the card is not `open`) may commit only the
