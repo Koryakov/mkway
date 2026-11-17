@@ -90,6 +90,7 @@ keeps this file and the register in step.
 - MW-132: a builder holding an open card never ends a turn silently: at its first stop the engine writes its last message into the orderer's inbox and blocks once, asking only for the ping line
 - MW-133: release 0.3.0: clean card paths, raise VERSION
 - MW-135: the commit gate's refusal of a red test that exists at HEAD and was green there says so and names the two ways out, not the red-first commit
+- MW-136: the refusal text of card-paths-changed names the routes that work today: restore the recorded Paths, or a new card opened by its orderer
 
 ## 0.2.7
 - MW-027: Install: one step to a committed fence

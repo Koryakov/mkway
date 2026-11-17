@@ -197,8 +197,9 @@ def _card_rules(facts: SubtaskFacts, rel: str) -> Optional[Verdict]:
     if facts.now_paths != recorded:
         return refuse("card-paths-changed", f"{rel}: the Paths of {card_id} differ from the set the owner's "
                                             f"`card open` recorded ({'; '.join(sorted(recorded)) or 'none'}); "
-                                            f"restore them, or ask the owner to run `{cli} card open "
-                                            f"{card_id}` again")
+                                            f"restore them to the recorded set, or put the extra files under a new card: "
+                                            f"the lead that orders it opens it (`{cli} card open <new id>`); a "
+                                            f"re-open of an open card records nothing")
     if recorded and not any(helpers.matches(rel, e) for e in recorded):
         return refuse("file-not-in-card", _noted(f"{rel} is not in the Paths of {card_id} "
                                                  f"({'; '.join(sorted(recorded))}); add it to the card and ask the "
