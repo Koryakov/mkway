@@ -120,6 +120,12 @@ def _pattern(profile) -> str:
     return DEFAULT_ID
 
 
+def id_pattern(profile) -> str:
+    """The regex of the ids of this root's ledger rows (card MW-134, R348a): `ids.decision_row` when it is set and compiles, else
+    `DEFAULT_ID`. The one place the id form of a root is read; the default of the red proof's decision pattern uses it."""
+    return _pattern(profile)
+
+
 def _literal_start(pattern: str) -> str:
     body = pattern[1:] if pattern.startswith("^") else pattern
     stop = _LITERAL_STOP.search(body)

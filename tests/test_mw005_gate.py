@@ -264,7 +264,11 @@ def test_the_gate_is_in_the_shell_group_after_the_lock_gate_and_has_a_switch(pro
                                         "red-ids-still-red", "red-not-recorded", "test-without-red-proof",
                                         "case-map-no-decision", "case-map-unknown-left", "case-map-unknown-right",
                                         "case-map-merge", "case-map-malformed", "shared-record-busy",
-                                        "red-record-partial"}
+                                        "red-record-partial",
+                                        # changed by MW-134 (R347, R348): the gate also returns the seven retire ids
+                                        "retire-no-decision", "retire-decision-not-in-ledger", "retire-decision-closed",
+                                        "retire-decision-by-self", "retire-no-ledger", "retire-right-not-red",
+                                        "retire-left-failing"}
     assert entry["timeout"] == 900 and entry["on_failure_reason"].strip() and "\n" not in entry["on_failure_reason"]
     stage(proj, "app.py", "def add(a, b):\n    return 0\n")
     set_profile(proj, gates=FILES_OFF)

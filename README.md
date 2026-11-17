@@ -722,7 +722,7 @@ that break a rule, counted per rule and per file; it is not a gate and writes no
   3 seconds in all), and every recorded id must now pass: one that was deleted, renamed, skipped or still fails is
   `red-ids-still-red`. A new test id committed with its code is refused `test-without-red-proof` unless the record holds it
   or it is a declared pin. A red suite is still refused `commit-tests-failed` first.
-  The case_map rules (card MW-090, rulings R219 to R225; refusals only, a valid line changes nothing yet): a commit that
+  The case_map rules (card MW-090, rulings R219 to R225; refusals only, a valid line retires a recorded red id since MW-134, see below): a commit that
   stages the card's `case_map.md` has its lines judged, a documents-only commit too (it runs no suite). Only lines new
   against HEAD's file are judged (set difference on the stripped text); blank and comment lines never are. A new mapping or
   dropped line needs a decision: a match of the profile pattern `tests.red_proof.decision_pattern` in the commit message,
@@ -738,12 +738,33 @@ that break a rule, counted per rule and per file; it is not a gate and writes no
   or one dropped line) are `case-map-malformed`. These five come before the reasons above, and at most ten lines are
   named per reason, the rest counted. The profile key `tests.red_proof` has two settings: `mode`, `trip` (default) or
   `watch` (the record row and the reason line, a warning, are written and the commit is allowed; it covers the five
-  case_map reasons too), and `decision_pattern`, a regular expression string, empty by default. The red proof is a card
+  case_map reasons too), and `decision_pattern`, a regular expression string (a key that is present stays as written, an empty one included, an
+  explicit off; a missing key reads the ledger's id form, `ids.decision_row` else `D-<n>`, when the root has a ledger file,
+  and is empty when it has none; a match must stand alone, never inside a longer token). The red proof is a card
   record kept in the shared folder (`state.shared_dir`, else the state folder) under an append lock; when another writer
   holds that lock beyond the wait the gate writes nothing and refuses `shared-record-busy`: repeat the call.
   When that 3-second limit runs out after at least one row was found, the check goes on with the rows found and the
   gate allows with one warning line, `red-record-partial`, naming the count and the times of the older rows left out;
   it is not a refusal and needs no action (the commit may still be refused for another reason).
+  The retirement of a recorded red id (card MW-134, rulings R347, R348, R348a). When a requirement changes after the red
+  commit, a recorded id that is gone makes every code commit of the card refuse `red-ids-still-red`. The way out is explicit:
+  write a line `<id> -> <new test id>` or `<id> -> dropped: <why>` in the card's `case_map.md` and commit it in a commit with
+  no code file (a tests-only commit, or one that stages documents alone), whose message names a decision of the ledger that
+  is not closed and that another session wrote (a session cannot retire its own failing test); then commit the code. The
+  line retires the id only in that commit and never in a code commit; nothing is inferred from a missing test; an id that is
+  present and fails, or whose file fails to collect (a syntax or import error), is failing and never retired; a rename's right
+  side must be recorded red (earlier, or red in this commit). A left the record holds needs no presence at HEAD, and a right
+  the record holds may exist at HEAD: the replacement is usually recorded red by an earlier commit. The refusals, each with
+  its way out in the text: `retire-no-decision`, `retire-decision-not-in-ledger`, `retire-decision-closed`,
+  `retire-decision-by-self`, `retire-no-ledger` (no ledger file: its `by` cannot be checked), `retire-right-not-red`,
+  `retire-left-failing`; they replace `case-map-no-decision` for a line that would retire, and stand after the case_map ones.
+  A commit that is refused for any reason, and a `watch` commit with a refusal, retires nothing. Each retired id is one
+  row of `red_proof.jsonl` (card, left, right or `dropped`, decision, the decision's `by`, session, time, the commit's tree;
+  no `red`, `pins` or `missing` key, so an older reader skips it) and one `notice` inbox row to the card's orderer; a notice
+  that cannot be written never refuses the commit (a calls-log error row `retire-notice-failed`). A retired id that a later
+  tests-only commit records red again is in the record again. `red-ids-still-red` names this way out only for an id that is
+  absent (the collection ran clean and the id is not in it); an id that fails, or sits in a file that does not collect, gets
+  no such text. `mkway scorecard` prints `retirements <card>: <n>`.
 
 ## Watch mode and trip
 Every manifest entry has a `class`: `integrity` or `form`; an entry with no class is `integrity`. The class follows the

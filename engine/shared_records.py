@@ -24,7 +24,7 @@ import profiles
 import runner
 
 # The card record files that move, each with its own write key (R310 3 a): red proof is one row per tree and card.
-CARD_FILES = {"red_proof.jsonl": ("tree", "card")}
+CARD_FILES = {"red_proof.jsonl": ("tree", "card", "retired")}  # MW-134: a retirement row (field `retired`) of a tree is another row than its red row
 NOOP_TEXT = "the shared folder is the state folder of the main checkout: nothing to migrate"
 READ, NO_STATE, PRUNABLE = "read", "no state folder", "prunable"
 GIT_SECONDS = 30

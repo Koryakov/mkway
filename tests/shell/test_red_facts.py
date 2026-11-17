@@ -392,11 +392,14 @@ def test_a_left_in_the_red_record_of_another_card_is_refused(tmp_path):
 
 @pytest.mark.parametrize("card, use_head", [("CARD-001", True), ("CARD-009", False)], ids=["same_card", "commit_never_made"])
 def test_a_red_record_of_the_same_card_or_of_a_commit_never_made_is_not_another_cards(tmp_path, card, use_head):
-    """Checks: the record of the committing card, and a row whose tree is no commit of HEAD, do not hold a left back."""
-    root = decided(tmp_path)
+    """Checks: the record of the committing card, and a row whose tree is no commit of HEAD, do not hold a left back.
+    Changed by MW-134 (R347, R348): a left the committing card's own record holds is retired by the line, and a retirement needs
+    a ledger decision of another session, so the root has a ledger and the message names its row."""
+    root = decided(tmp_path, LEDGER_PATTERN)
+    decision = add_decision(root, "session:other")
     write_record(root, json.dumps({"card": card, "tree": head_tree(root, use_head), "red": [OLD]}))
     stage_rename(root)
-    assert reason(run_gate(root, commit_with("DEC-1", "rename"))) == "allow"
+    assert reason(run_gate(root, commit_with(decision, "rename"))) == "allow"
 
 
 def test_a_ledger_decision_that_is_in_force_and_not_by_the_session_counts(tmp_path):

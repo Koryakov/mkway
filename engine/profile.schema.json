@@ -659,7 +659,7 @@
             },
             "decision_pattern": {
               "type": "string",
-              "description": "a regular expression: the matches in a commit message are the decisions it names; a card's case_map.md line is honoured only under one that counts (MW-090); empty (default) or not compiling means no decision"
+              "description": "a regular expression: the matches in a commit message are the decisions it names; a card's case_map.md line is honoured only under one that counts (MW-090), and a recorded red id is retired only under one that is a ledger row (MW-134); a match must be a whole id; a key that is present stays as written, an empty one included; a missing key reads the ledger's id form (ids.decision_row, else D-<n>) in a root with a ledger file, and is empty in a root with none; a value that does not compile means no decision"
             }
           }
         },

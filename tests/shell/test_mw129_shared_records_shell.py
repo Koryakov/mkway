@@ -701,8 +701,12 @@ def test_the_way_out_of_the_held_back_line_is_the_commit_without_it_and_it_needs
 
 def test_the_red_row_of_the_committing_card_itself_from_a_worktree_does_not_hold_the_line_back(tmp_path):
     """Checks: the other way out, the rename by the card that holds the record: a row of CARD-001 (this card) from a worktree
-    is no other card's red, so the same line is allowed."""
-    root = decided_root(tmp_path)
+    is no other card's red, so the same line is allowed. Changed by MW-134 (R347, R348): the line now retires that recorded id,
+    which needs a ledger decision of another session, so the root has a ledger (its id form is the default pattern) and the
+    message names its row."""
+    import ledger
+    root = rp.red_project(tmp_path, name="main", state={"dir": "mkway/state", "shared_dir": str(tmp_path / "shared")})
+    decision = ledger.add(root, w.profile_of(root), card="C", topic="t", quote="q", source="s", by="session:other")["id"]
     red_row_from_a_worktree(root, tmp_path, rp.CARD)
     stage_rename(root)
-    assert reason(rename_gate(root)) == "allow"
+    assert reason(run_gate(root, f'git commit -m "CARD-001 {decision} rename"')) == "allow"

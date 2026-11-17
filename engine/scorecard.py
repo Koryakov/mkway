@@ -4,6 +4,7 @@ Read-only; every number is counted from a file in the state folder, and a file t
 read counts as nothing (never as zero seconds). Lines:
 - `refusals <reason>: <n>`: rows of `refusals.jsonl` of kind `refuse`, per reason id (a warn, a log row and a would-refuse
   row are not refusals);
+- `retirements <card>: <n>` (card MW-134): the retirement rows of `red_proof.jsonl` (the shared folder) per card, one per retired id;
 - `a/b: real catches <a>, false blocks <b>`: only when `<state>/classification.jsonl` exists; a row is
   `{"reason_id": ..., "class": "a" or "b"}` (the operator writes it; the engine never does);
 - `test runs: <n> trees, <s> s in all, <s> s mean, <s> s longest`: rows of `commit_tests.jsonl` with `duration_seconds`,
@@ -22,6 +23,7 @@ import asks
 import gatemode
 import logs
 import profiles
+import shared_records
 
 CLASSIFICATION = "classification.jsonl"
 COMMIT_TESTS = "commit_tests.jsonl"
@@ -54,6 +56,16 @@ def refusals_per_reason(state) -> dict:
     for row in read_rows(Path(state) / logs.REFUSALS):
         if row.get("kind") == "refuse" and isinstance(row.get("reason_id"), str):
             counts[row["reason_id"]] = counts.get(row["reason_id"], 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def retirements_per_card(root, profile) -> dict:
+    """MW-134 (R347 2 e): `{card: n}`, the retirement rows (key `retired`) of `red_proof.jsonl` in the shared folder, per card; one row
+    is one retired id."""
+    counts: dict = {}
+    for row in shared_records.read_rows(root, profile, "red_proof.jsonl"):
+        if isinstance(row.get("retired"), str) and isinstance(row.get("card"), str):
+            counts[row["card"]] = counts.get(row["card"], 0) + 1
     return dict(sorted(counts.items()))
 
 
@@ -101,6 +113,7 @@ def lines(root, profile) -> list:
     state = profiles.state_dir(root, profile)
     out = ["scorecard"]
     out += [f"refusals {reason}: {n}" for reason, n in refusals_per_reason(state).items()]
+    out += [f"retirements {card}: {n}" for card, n in retirements_per_card(root, profile).items()]
     found = classification(state)
     if found is not None:
         out.append(f"a/b: real catches {found[0]}, false blocks {found[1]}")

@@ -23,7 +23,11 @@ def test_the_manifest_declares_the_warn_reason_of_the_allow_line():
                                         "red-ids-still-red", "red-not-recorded", "test-without-red-proof",
                                         "case-map-no-decision", "case-map-unknown-left", "case-map-unknown-right",
                                         "case-map-merge", "case-map-malformed", "shared-record-busy",
-                                        "red-record-partial"}
+                                        "red-record-partial",
+                                        # changed by MW-134 (R347, R348): the gate also returns the seven retire ids
+                                        "retire-no-decision", "retire-decision-not-in-ledger", "retire-decision-closed",
+                                        "retire-decision-by-self", "retire-no-ledger", "retire-right-not-red",
+                                        "retire-left-failing"}
 
 
 def test_the_readme_states_the_new_rule():

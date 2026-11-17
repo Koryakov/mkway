@@ -93,6 +93,34 @@ EXEMPT = {
         "the search limit left out after a row was found; tests/shell/test_mw131_own_record_shell.py::"
         "test_the_limit_running_out_after_a_found_row_allows_with_the_found_rows_and_one_line asserts that the call is allowed "
         "and that the line is exact",
+    ("commit_tests", "retire-no-decision"):
+        "a refusal of a retirement commit (MW-134, R347, R348): it needs a card with a red record, a history of commits with its "
+        "rows and a ledger, which a real hook call cannot build on demand; its way out is run by "
+        "tests/shell/test_mw134_retire_shell.py::test_the_way_out_of_retire_no_decision_is_a_message_that_names_a_decision",
+    ("commit_tests", "retire-decision-not-in-ledger"):
+        "a refusal of a retirement commit (MW-134, R347, R348): it needs a card with a red record, a history of commits with its "
+        "rows and a ledger, which a real hook call cannot build on demand; its way out is run by "
+        "tests/shell/test_mw134_retire_shell.py::test_the_way_out_of_retire_decision_not_in_ledger_is_a_decision_that_is_a_row_of_the_ledger",
+    ("commit_tests", "retire-decision-closed"):
+        "a refusal of a retirement commit (MW-134, R347, R348): it needs a card with a red record, a history of commits with its "
+        "rows and a ledger, which a real hook call cannot build on demand; its way out is run by "
+        "tests/shell/test_mw134_retire_shell.py::test_the_way_out_of_retire_decision_closed_is_a_decision_that_is_in_force",
+    ("commit_tests", "retire-decision-by-self"):
+        "a refusal of a retirement commit (MW-134, R347, R348): it needs a card with a red record, a history of commits with its "
+        "rows and a ledger, which a real hook call cannot build on demand; its way out is run by "
+        "tests/shell/test_mw134_retire_shell.py::test_the_way_out_of_retire_decision_by_self_is_a_decision_another_session_wrote",
+    ("commit_tests", "retire-no-ledger"):
+        "a refusal of a retirement commit (MW-134, R347, R348): it needs a card with a red record, a history of commits with its "
+        "rows and a ledger, which a real hook call cannot build on demand; its way out is run by "
+        "tests/shell/test_mw134_retire_shell.py::test_the_way_out_of_retire_no_ledger_is_a_ledger_row_of_another_session",
+    ("commit_tests", "retire-right-not-red"):
+        "a refusal of a retirement commit (MW-134, R347, R348): it needs a card with a red record, a history of commits with its "
+        "rows and a ledger, which a real hook call cannot build on demand; its way out is run by "
+        "tests/shell/test_mw134_retire_shell.py::test_the_way_out_of_retire_right_not_red_is_a_right_side_that_was_seen_red",
+    ("commit_tests", "retire-left-failing"):
+        "a refusal of a retirement commit (MW-134, R347, R348): it needs a card with a red record, a history of commits with its "
+        "rows and a ledger, which a real hook call cannot build on demand; its way out is run by "
+        "tests/shell/test_mw134_retire_shell.py::test_the_way_out_of_retire_left_failing_is_a_file_that_collects",
     ("commit_files", "verdict-unproven"):
         "a refusal of the commit of a verdict file whose rows have no record of `verdict add`; it needs a card with real "
         "verdict records, so tests/test_mw102_e2e.py shows it through the real hook",

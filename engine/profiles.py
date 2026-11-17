@@ -384,13 +384,22 @@ def red_proof_mode(profile) -> str:
     return mode if mode in RED_PROOF_MODES else "trip"
 
 
-def red_proof_decision_pattern(profile) -> str:
-    """`tests.red_proof.decision_pattern` (MW-090): the regex of the decisions a commit message may name; a missing or
-    unusable value is the empty string, which is no decision (fail closed). Whether it compiles is the gate's question."""
+def red_proof_decision_pattern(profile, root=None) -> str:
+    """`tests.red_proof.decision_pattern` (MW-090; the default, MW-134, R348a): the regex of the decisions a commit message may name.
+    A key that is PRESENT stays as written, an empty one included (an explicit off); a present value that is no string is the empty
+    string, which is no decision (fail closed). A MISSING key reads, when the caller names the `root` and the root has a ledger file,
+    the ledger's id form (`ids.decision_row`, else `ledger.DEFAULT_ID`); with no ledger file, or with no `root`, it is the empty
+    string as before. The one place the default lives, so every caller sees the same pattern. Whether it compiles is the gate's
+    question."""
     group = profile.get("tests") if isinstance(profile, dict) else None
     raw = group.get("red_proof") if isinstance(group, dict) else None
-    pattern = raw.get("decision_pattern") if isinstance(raw, dict) else None
-    return pattern if isinstance(pattern, str) else ""
+    if isinstance(raw, dict) and "decision_pattern" in raw:
+        pattern = raw["decision_pattern"]
+        return pattern if isinstance(pattern, str) else ""
+    if root is None:
+        return ""
+    import ledger  # late: the ledger imports this module
+    return ledger.id_pattern(profile) if ledger.path(root, profile).is_file() else ""
 
 
 def commit_tests_budget(profile):

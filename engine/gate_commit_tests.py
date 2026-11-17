@@ -20,7 +20,13 @@ dir, the suite runs there, and the folder is removed. The rules:
   card MW-090: a commit that stages the card's `case_map.md` (a documents-only commit too, with no suite run) has its new
   lines judged under a decision the commit message names (`tests.red_proof.decision_pattern`, and the ledger when the root
   has one): `case-map-no-decision`, `case-map-unknown-left`, `case-map-unknown-right`, `case-map-merge`,
-  `case-map-malformed`; they stand before the red proof's reasons and follow `tests.red_proof.mode` too;
+  `case-map-malformed`; they stand before the red proof's reasons and follow `tests.red_proof.mode` too; card MW-134 (rulings
+  R347, R348, R348a): in a commit with no code file (a documents-only commit too) a valid line whose left id the card's red record
+  holds RETIRES it, under a ledger decision of another session (`retire-no-decision`, `retire-decision-not-in-ledger`,
+  `retire-decision-closed`, `retire-decision-by-self`, `retire-no-ledger`, `retire-right-not-red`, `retire-left-failing`): one row of
+  `red_proof.jsonl` per retired id (the reader `_record_of` drops the id for the commits after that row) and one inbox notice to the
+  card's orderer (`_write_retirements`, `_notify`); a line in a code commit retires nothing, and `red-ids-still-red` names the way out
+  for an id that is absent, never for one that fails or whose file does not collect (`_outcomes`);
 - every staged file matches `paths.docs`: no run;
 - otherwise the command (`tests.command`, default `python -m pytest -q` over the `test_roots`) runs with the
   environment names of `test_env`, `ENGINE_TERMS_FILE` and the system essentials (SESSION_ENV: the folders Python and
@@ -550,7 +556,7 @@ def _gate(ctx, profile, commit):
         roots = profiles.test_roots(profile)
         if profiles.docs_only(profile, rels):
             return _docs_commit(ctx, profile, folder, top, prefix, state, work, started, limit, budget, rels, roots, env,
-                                commit.message)
+                                commit.message, commit)
         in_roots = [any(helpers.matches(r, root) for root in roots) for r in rels]
         code = any(not t and not profiles.docs_only(profile, [r]) for r, t in zip(rels, in_roots))
         tests_only = not code and any(in_roots)
@@ -869,18 +875,54 @@ def _record_of(run: "_Run", card_id: str) -> OwnRecord:
     cause says why: no row, rows no commit has, the search limit ran out, the history could not be read. No listing is read
     when the card has no row."""
     rows = _kept_red_rows(run, lambda row: row.get("card") == card_id
-                          and (row.get("red") or row.get("pins") or row.get("missing")))
-    if not rows:
+                          and (_holds_red(row) or isinstance(row.get("retired"), str)))
+    if not any(_holds_red(r) for r in rows):
         return OwnRecord(None, core_red.CAUSE_NO_ROW)
     found = find_red_rows(run.folder, rows, OWN_RECORD_SEARCH_SECONDS, _clock, every_row=True)
-    if found.case != FOUND:
+    held = [r for r in found.rows if _holds_red(r)]  # card MW-134: a retirement row alone is no record
+    if found.case != FOUND or not held:
         causes = {NOT_IN_HISTORY: core_red.CAUSE_NOT_IN_HISTORY, OUT_OF_TIME: core_red.CAUSE_OUT_OF_TIME,
                   UNREADABLE: core_red.CAUSE_UNREADABLE}  # causes of a missing record, not reason ids
-        return OwnRecord(None, causes[found.case], found.checked)
-    record = core_red.Record(red=frozenset(i for r in found.rows for i in r.get("red", [])),
-                             pins=frozenset(i for r in found.rows for i in r.get("pins", [])),
-                             files=frozenset(f for r in found.rows for f in (r.get("missing") or {})))
+        return OwnRecord(None, causes.get(found.case, core_red.CAUSE_NOT_IN_HISTORY), found.checked)
+    retired = _still_retired(run.folder, found.rows, held)
+    record = core_red.Record(red=frozenset(i for r in held for i in r.get("red", [])) - retired,
+                             pins=frozenset(i for r in held for i in r.get("pins", [])),
+                             files=frozenset(f for r in held for f in (r.get("missing") or {})))
     return OwnRecord(record, "", found.checked, found.lost)
+
+
+def _holds_red(row) -> bool:
+    """A row of the red record that holds a red id, a pin or a red-by-missing file (a retirement row holds none of them)."""
+    return bool(row.get("red") or row.get("pins") or row.get("missing"))
+
+
+def _still_retired(folder, rows, held) -> set:
+    """The ids the retirement rows of `rows` (found in HEAD's history) take out of the record (card MW-134, R347 2 e, R348 4): an id
+    is retired when a retirement row names it and no row that records it red lies NEWER in HEAD's history than the newest
+    retirement. Position is the place of the row's commit in the one `git log` of HEAD; a commit tree that several commits share
+    counts for the oldest of them as a retirement and for the newest as a red row, and a row whose commit cannot be placed (a legacy
+    row with no git tree) counts for nothing as a retirement and as no newer red row. Nothing is retired when the history cannot
+    be read."""
+    retires = [r for r in rows if isinstance(r.get("retired"), str)]
+    if not retires:
+        return set()
+    history = commit_history(folder)
+    if history is None:
+        return set()
+    newest, oldest = {}, {}
+    for place, (_commit, tree, _time) in enumerate(history):
+        newest.setdefault(tree, place)
+        oldest[tree] = place
+    out = set()
+    for left in {r["retired"] for r in retires}:
+        stamps = [oldest[r["git_tree"]] for r in retires if r["retired"] == left and r.get("git_tree") in oldest]
+        if not stamps:
+            continue
+        at = min(stamps)  # the newest retirement; smaller is newer
+        later = [newest[t] for r in held if left in r.get("red", []) for t in (r.get("git_tree") or r["tree"],) if t in newest]
+        if not any(place < at for place in later):
+            out.add(left)
+    return out
 
 
 # MW-114: a `-v` line is read from the right: it starts with `<path>::`, the id is everything up to the LAST status word
@@ -941,12 +983,19 @@ def _outcomes(run: "_Run", cwd: Path, ids, roots) -> dict:
                                              env=_environment(run.ctx, run.profile))
         if code is None:
             raise NotRun("the recorded red tests did not finish within the time left, so they could not be checked")
-        text = (out or b"").decode("utf-8", "replace") + "\n" + (err or b"").decode("utf-8", "replace")
-        seen = {norm_id(i): s for i, s in STATUS.findall(text.replace("\r\n", "\n"))}
+        text = ((out or b"").decode("utf-8", "replace") + "\n" + (err or b"").decode("utf-8", "replace")).replace("\r\n", "\n")
+        seen = {norm_id(i): s for i, s in STATUS.findall(text)}
+        # card MW-134 (R348 2): a file that failed to collect (a syntax or import error) loses its ids too; that is FAILING, never
+        # absent. Absent: the collection ran clean (exit 0, 1 or 5) and the id is not in it, or its file is gone altogether.
+        broken = {norm_id(name) for name in COLLECT_HEAD.findall(text)}
+        unclean = code not in (0, 1, 5)
     result = {}
     for ident in ids:
         states = [s for i, s in seen.items() if i == ident or i.startswith(ident + "[")]
-        if not states:
+        file = norm_id(ident).split("::", 1)[0]
+        if not states and file in present and (norm_id(file) in broken or unclean):
+            result[ident] = core_red.FAILED
+        elif not states:
             result[ident] = core_red.GONE
         elif any(s in ("FAILED", "ERROR") for s in states):
             result[ident] = core_red.FAILED
@@ -969,7 +1018,7 @@ def _write_record(run: "_Run", card_id: str, tree: str, verdict, would: list, mo
     try:
         # MW-129: into the shared folder, under the append lock; the same tree judged before (a repeated call) is not
         # written again: one row per tree and card, checked inside the lock with the append (P1)
-        shared_records.append_row(run.ctx.root, run.profile, RED_FILE, row, key=("tree", "card"))
+        shared_records.append_row(run.ctx.root, run.profile, RED_FILE, row, key=("tree", "card", "retired"))  # MW-134: a retirement row of the same tree is another row
     except logs.AppendBusy:
         raise RecordBusy(f"another writer holds the append lock of {shared_records.shared_path(run.ctx.root, run.profile, RED_FILE)}"
                          f", so the red record of {card_id} was not written and the commit is refused: repeat the call")
@@ -982,30 +1031,51 @@ def _others_red(run: "_Run", card_id: str) -> dict:
     return {i: str(r.get("card")) for r in rows for i in r["red"]}
 
 
+def _whole(text: str, found) -> bool:
+    """A match of the decision pattern stands alone in `text` (card MW-134, R348a 3): no word character or hyphen directly before or
+    after it, so `D-1x` and the tail of a card id name no decision."""
+    before = text[found.start() - 1] if found.start() > 0 else ""
+    after = text[found.end()] if found.end() < len(text) else ""
+    return not (before and (before.isalnum() or before in "_-")) and not (after and (after.isalnum() or after in "_-"))
+
+
 def _decisions(run: "_Run", message) -> tuple:
-    """The decisions the commit message names (card MW-090, R222 1): the non-empty matches of `tests.red_proof.decision_pattern`,
-    each once; none when the pattern is empty or does not compile. In a root whose ledger file exists a match is a row of it
-    or not, with its closed status (the ledger's own closed statuses) and whether its `by` is this session (case, spaces and
-    the `session:` prefix ignored, as `core_verdicts.who` does); with no ledger file the pattern alone decides."""
+    """The decisions the commit message names (card MW-090, R222 1): the non-empty whole-id matches (card MW-134) of
+    `tests.red_proof.decision_pattern` (its default, R348a, is read by `profiles.red_proof_decision_pattern`), each once; none when
+    the pattern is empty or does not compile. In a root whose ledger file exists a match is a row of it or not, with its closed
+    status (the ledger's own closed statuses), whether its `by` is this session (case, spaces and the `session:` prefix ignored, as
+    `core_verdicts.who` does) and that `by`; with no ledger file the pattern alone decides, and `has_ledger` is False (a retirement
+    needs a ledger: card MW-134)."""
     try:
-        pattern = re.compile(profiles.red_proof_decision_pattern(run.profile))
+        pattern = re.compile(profiles.red_proof_decision_pattern(run.profile, run.ctx.root))
     except re.error:
         return ()
-    ids = list(dict.fromkeys(m.group(0) for m in pattern.finditer(message or "") if m.group(0)))
+    text = message or ""
+    ids = list(dict.fromkeys(m.group(0) for m in pattern.finditer(text) if m.group(0) and _whole(text, m)))
     if not ledger.path(run.ctx.root, run.profile).is_file():
-        return tuple(core_red.Decision(i) for i in ids)
+        return tuple(core_red.Decision(i, has_ledger=False) for i in ids)
     rows = {r["id"]: r for r in ledger.read(run.ctx.root, run.profile)}
     me = core_verdicts.who(run.ctx.session_id)
     return tuple(core_red.Decision(i, in_ledger=False) if i not in rows else core_red.Decision(
         i, closed=rows[i]["status"] if ledger.is_closed(rows[i]["status"]) else "",
-        by_self=bool(me) and core_verdicts.who(rows[i]["by"]) == me) for i in ids)
+        by_self=bool(me) and core_verdicts.who(rows[i]["by"]) == me, by=str(rows[i]["by"])) for i in ids)
 
 
-def _case_map_facts(run: "_Run", card_id: str, rels, roots, env, message) -> dict:
+def _parses(text) -> bool:
+    try:
+        ast.parse(text)
+    except (SyntaxError, ValueError):
+        return False
+    return True
+
+
+def _case_map_facts(run: "_Run", card_id: str, rels, roots, env, message, collect_errors=()) -> dict:
     """The case_map part of the facts (card MW-090), or {} when the commit does not stage the card's `case_map.md` (or deletes
     it): its text in the committed tree and at HEAD, the decisions, the test roots, the static test ids at HEAD and in the
     committed tree of the files the new lines' sides name (a left file is read by its own path at HEAD, it may be
-    unstaged), and the red ids of the other cards."""
+    unstaged), and the red ids of the other cards. Card MW-134: `broken_files`, the files of those sides that fail to parse in
+    the committed tree or that the run (`collect_errors`, its file-level failures) could not collect: their ids are failing,
+    never absent, though the static reader sees none of them."""
     rel = cardtool.card_file(Path(run.ctx.root), run.profile, card_id).with_name("case_map.md") \
         .relative_to(Path(run.ctx.root)).as_posix()
     text = _blob(run, env, rel, "") if rel in rels else None
@@ -1014,8 +1084,12 @@ def _case_map_facts(run: "_Run", card_id: str, rels, roots, env, message) -> dic
     head = _blob(run, None, rel, "HEAD") or ""
     files = core_red.case_map_files(text, head, roots)
     ids = lambda rev, e: frozenset(i for f in files for i in static_ids(_blob(run, e, f, rev) or "", f))  # noqa: E731
+    committed = {f: _blob(run, env, f, "") for f in files}
+    broken = {f for f, body in committed.items() if body is not None and not _parses(body)}
+    broken |= {norm_id(f) for f in collect_errors if "::" not in f} & set(files)
     return {"case_map": text, "case_map_head": head, "decisions": _decisions(run, message), "test_roots": tuple(roots),
-            "head_ids": ids("HEAD", None), "tree_ids": ids("", env), "other_red": _others_red(run, card_id)}
+            "head_ids": ids("HEAD", None), "tree_ids": ids("", env), "other_red": _others_red(run, card_id),
+            "broken_files": frozenset(broken)}
 
 
 def _answer(verdict, mode: str):
@@ -1029,9 +1103,11 @@ def _answer(verdict, mode: str):
     return gate.refuse(verdict.refusals[0].reason, f"{said}. {OUT}")
 
 
-def _docs_commit(ctx, profile, folder, top, prefix, state, work, started, limit, budget, rels, roots, env, message):
+def _docs_commit(ctx, profile, folder, top, prefix, state, work, started, limit, budget, rels, roots, env, message, commit=None):
     """A commit of documents alone (card MW-090, R225 4): no suite run, as before, except that a commit that stages the
-    card's `case_map.md` has its lines judged. A session with no card, or a command that is not pytest, is not judged."""
+    card's `case_map.md` has its lines judged. A session with no card, or a command that is not pytest, is not judged. Card MW-134:
+    a commit with new lines reads the card's red record too, and a valid line whose left the record holds retires it (the
+    retirement commit of R348 1 stages the case_map alone)."""
     card, _open = _cards(ctx, profile)
     try:
         argv = _argv(profile, roots)
@@ -1043,9 +1119,71 @@ def _docs_commit(ctx, profile, folder, top, prefix, state, work, started, limit,
     extra = _case_map_facts(run, card[0], rels, roots, env, message)
     if not extra:
         return gate.allow()
-    verdict = core_red.decide(core_red.Facts(card=card[0], paths=tuple(sorted(card[1])), **extra))
+    held = {}
+    if any(line.kind in ("mapping", "dropped") for line in core_red.case_map_new(extra["case_map"], extra["case_map_head"])):
+        own = _record_of(run, card[0])
+        held = {"record": own.record, "record_cause": own.cause}
+    verdict = core_red.decide(core_red.Facts(card=card[0], paths=tuple(sorted(card[1])), **held, **extra))
+    if verdict.retired:
+        tree = staged_key(_read(folder, "ls-files", "-s", "-z", env=env, text=False))
+        _write_retirements(run, card[0], tree, verdict.retired, commit)
     answer = _answer(verdict, profiles.red_proof_mode(profile))
     return gate.allow() if answer is None else answer
+
+
+def _write_retirements(run: "_Run", card_id: str, tree: str, retired, commit) -> None:
+    """One row of `red_proof.jsonl` per retired id (card MW-134, R347 2 e): the card, the left id, the right id or `dropped`, the
+    decision and its `by`, the session, the time, and the tree of this commit (the digest and the git tree id, so the reader finds
+    the row in the history of HEAD). The row holds no `red`, `pins` or `missing` key, so a reader that does not know the kind skips
+    it. Then one inbox notice each (`_notify`). A commit whose git tree cannot be told is refused (fail closed): a row no reader
+    could place would retire nothing."""
+    git_tree = tree_id(run.ctx, commit) if commit is not None else None
+    if not git_tree:
+        raise NotRun("the git tree this commit will have could not be read, so its retirement could not be recorded; repeat the call")
+    when = logs.now().isoformat(timespec="milliseconds")
+    for one in retired:
+        row = {"time": when, "session": run.ctx.session_id, "card": card_id, "tree": tree, "git_tree": git_tree,
+               "retired": one.left, "right": one.right, "decision": one.decision, "by": one.by}
+        try:
+            shared_records.append_row(run.ctx.root, run.profile, RED_FILE, row, key=("tree", "card", "retired"))
+        except logs.AppendBusy:
+            raise RecordBusy(f"another writer holds the append lock of {shared_records.shared_path(run.ctx.root, run.profile, RED_FILE)}"
+                             f", so the retirement of {one.left} was not recorded and the commit is refused: repeat the call")
+    _notify(run, card_id, retired)
+
+
+def _notify(run: "_Run", card_id: str, retired) -> None:
+    """R348 3: one `notice` inbox row to the card's orderer for each retirement, «<session> retired <left> of <card> under
+    <decision>», through the writer of the handoff notice (`messages.send_handoff`, one call each). A failure never refuses the
+    commit: a calls-log error row `retire-notice-failed` (as MW-132's), and the retirement stands. No orderer (the owner, or none):
+    no notice."""
+    session = run.ctx.session_id
+    state = profiles.state_dir(run.ctx.root, run.profile)
+
+    def failed(exc: BaseException) -> None:
+        try:
+            import gatemode
+            lines = str(exc).strip().splitlines()
+            gatemode.append_call(state, "commit_tests", "error", session=session, event="PreToolUse", reason_id="retire-notice-failed",
+                                 error=exc.__class__.__name__, message=lines[0][:200] if lines else exc.__class__.__name__)
+        except Exception:  # noqa: BLE001 - the notice is an extra; nothing here may refuse the commit
+            pass
+
+    try:
+        import messages
+        shared = profiles.shared_state_dir(run.ctx.root, run.profile)
+        orderer = messages.orderer_of(run.ctx.root, run.profile, session)
+    except Exception as exc:  # noqa: BLE001
+        failed(exc)
+        return
+    if orderer is None:
+        return
+    for one in retired:
+        try:
+            messages.send_handoff(run.ctx.root, run.profile, shared, session, orderer,
+                                  core_red.retire_notice(session, one.left, card_id, one.decision), card_id)
+        except Exception as exc:  # noqa: BLE001
+            failed(exc)
 
 
 def _red_proof(run: "_Run", row: dict, tree: str, card, rels, roots, code: bool, env, message=None, commit=None):
@@ -1091,12 +1229,15 @@ def _red_proof(run: "_Run", row: dict, tree: str, card, rels, roots, code: bool,
         pin_rows=frozenset(i for i in new_ids if norm_id(base(i)) in pinned),
         checks_docstring=frozenset(i for i in new_ids if doc(i).startswith("Checks:")),
         record=record, record_cause=own.cause, record_checked=own.checked, record_limit=OWN_RECORD_SEARCH_SECONDS,
-        outcomes=outcomes, **_case_map_facts(run, card_id, rels, roots, env, message))
+        outcomes=outcomes, **_case_map_facts(run, card_id, rels, roots, env, message,
+                                             collect_errors=tuple(row.get("file_errors") or {})))
     verdict = core_red.decide(facts)
     mode = profiles.red_proof_mode(run.profile)
     would = list(dict.fromkeys(r.reason for r in verdict.refusals))
     if not code and (mode == "watch" or not would):
         _write_record(run, card_id, tree, verdict, would, mode, commit)
+    if not code and verdict.retired:  # card MW-134: never with a refusal, so never in a refused commit
+        _write_retirements(run, card_id, tree, verdict.retired, commit)
     excused = set() if code else {i for ids in failing.values() for i in ids} | set(file_errs)  # red the commit must show
     answer = _answer(verdict, mode)  # the case_map refusals stand first in the verdict: they name the reason id
     if answer is None and own.lost:

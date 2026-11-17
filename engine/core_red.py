@@ -24,7 +24,16 @@ its file at HEAD, gone from the committed tree and in no other card's red record
 test of its file in the committed tree (`case-map-unknown-right`); one right side appears in at most one mapping line and
 never names a test that exists at HEAD (`case-map-merge`); a line the parser calls malformed, a side with a `[case]` suffix
 and a left side that is not in exactly one kind of line are `case-map-malformed`. These refusals come first in the verdict,
-so the reason id of the commit is a case_map one when the case_map is bad. A valid line changes nothing yet.
+so the reason id of the commit is a case_map one when the case_map is bad.
+
+The retirement of a recorded red id (card MW-134, rulings R347, R348, R348a): a valid line (a mapping or a dropped one) whose left
+id is in the card's red record retires that id, only in a commit with no code file (a tests-only commit, or one that stages
+documents alone), only under a decision of the commit message that the ledger holds, that is not closed and that another session
+wrote, and only when the commit has no refusal at all. A rename's right side must be proven red (in the record, or red in this
+commit). A left whose file does not collect is failing, not absent. For a line that would retire, the decision refusals are the
+`retire-*` ids (they replace `case-map-no-decision`), and the HEAD and merge facts of MW-090 are not asked of a left or a right
+the record holds (the real order of events: the replacement is already red and at HEAD, the left already gone). `Verdict.retired`
+lists what is retired. A line in a code commit retires nothing; the code commit is judged with the record as it was.
 """
 from __future__ import annotations
 
@@ -52,6 +61,17 @@ CM_UNKNOWN_RIGHT = "case-map-unknown-right"
 CM_MERGE = "case-map-merge"
 CM_MALFORMED = "case-map-malformed"
 CASE_MAP_REASONS = (CM_NO_DECISION, CM_UNKNOWN_LEFT, CM_UNKNOWN_RIGHT, CM_MERGE, CM_MALFORMED)  # the order the refusals are listed in
+# card MW-134 (R347, R348): the refusals of a retirement, in the order they are listed after the case_map ones
+RETIRE_NO_DECISION = "retire-no-decision"
+RETIRE_NOT_IN_LEDGER = "retire-decision-not-in-ledger"
+RETIRE_CLOSED = "retire-decision-closed"
+RETIRE_BY_SELF = "retire-decision-by-self"
+RETIRE_NO_LEDGER = "retire-no-ledger"
+RETIRE_RIGHT_NOT_RED = "retire-right-not-red"
+RETIRE_LEFT_FAILING = "retire-left-failing"
+RETIRE_REASONS = (RETIRE_NO_DECISION, RETIRE_NOT_IN_LEDGER, RETIRE_CLOSED, RETIRE_BY_SELF, RETIRE_NO_LEDGER,
+                  RETIRE_RIGHT_NOT_RED, RETIRE_LEFT_FAILING)
+DROPPED = "dropped"  # the `right` of a retirement by a dropped line
 CASE_MAP_CAP = 10  # lines named per reason; the rest are counted (R220)
 _COUNTED = ("mapping", "dropped")
 PIN_KINDS = ("refactor", "migration")
@@ -108,6 +128,17 @@ class Decision(NamedTuple):
     in_ledger: bool = True  # False: the root has a ledger and it holds no row with this id
     closed: str = ""  # the row's status when the ledger's own closed statuses hold it (withdrawn, superseded)
     by_self: bool = False  # the row's by is the committing session
+    has_ledger: bool = True  # card MW-134: the root has a ledger file; False: nothing can be retired under it (its by is unknown)
+    by: str = ""  # card MW-134: the `by` of the ledger row, kept in the record row of a retirement
+
+
+class Retirement(NamedTuple):
+    """One recorded red id a commit retires (card MW-134): the left id, its replacement (`DROPPED` for a dropped line), the
+    decision it is retired under and that ledger row's `by`."""
+    left: str
+    right: str
+    decision: str
+    by: str
 
 
 def _why_not(d: Decision) -> str:
@@ -156,6 +187,7 @@ class Facts:
     head_ids: frozenset = frozenset()  # static test ids at HEAD of the files the new lines' sides name
     tree_ids: frozenset = frozenset()  # the same in the committed tree
     other_red: Mapping[str, str] = field(default_factory=dict)  # id -> card of the red records of the other cards
+    broken_files: frozenset = frozenset()  # card MW-134: test files of the lines' left sides that fail to parse or to collect in the committed tree
 
 
 @dataclass(frozen=True)
@@ -171,6 +203,7 @@ class Verdict:
     pins: Tuple[str, ...] = ()
     checks: Tuple[str, ...] = ()
     missing: Mapping[str, str] = field(default_factory=dict)
+    retired: Tuple[Retirement, ...] = ()  # card MW-134: the recorded red ids this commit retires; never with a refusal
 
     @property
     def allowed(self) -> bool:
@@ -318,7 +351,21 @@ def _with_code(f: Facts, refusals: list) -> None:
     for ident in sorted(f.record.red):
         outcome = f.outcomes.get(ident, GONE)
         if outcome != PASSED:
-            refusals.append(Refusal(STILL_RED, f"{ident}: {STILL_RED}: a recorded red test must now pass, and {what.get(outcome, 'it did not pass')}"))
+            way = retire_way_out(ident) if outcome == GONE else ""  # card MW-134: only an absent id can be retired
+            refusals.append(Refusal(STILL_RED, f"{ident}: {STILL_RED}: a recorded red test must now pass, and {what.get(outcome, 'it did not pass')}{way}"))
+
+
+def retire_way_out(ident: str) -> str:
+    """The way out `red-ids-still-red` names for an id that is absent (card MW-134, R347 2 f): the builder's only guide."""
+    return (f"; if the requirement changed and the test is retired on purpose: write the line `{ident} -> <new test id>` (or "
+            f"`{ident} -> dropped: <why>`) in the card's case_map.md and name in the commit message a decision of the ledger that "
+            f"another session wrote (a session cannot retire its own failing test), then commit that alone, with no code file, and "
+            f"after it commit the code")
+
+
+def retire_notice(session: str, left: str, card: str, decision: str) -> str:
+    """The body of the inbox notice a retirement writes to the card's orderer (R348 3)."""
+    return f"{session} retired {left} of {card} under {decision}"
 
 
 def case_map_new(text: str, head: str) -> List[CaseMapLine]:
@@ -357,7 +404,8 @@ def case_map_files(text: str, head: str, roots) -> List[str]:
 
 def _left_fact(f: Facts, left: str) -> str:
     """The first fact that makes the left side of a mapping or dropped line unknown (R223 4, R225 6); empty when it holds."""
-    if not _under(left, f.test_roots) or left not in f.head_ids:
+    recorded = f.record is not None and left in f.record.red  # card MW-134: the record proves it was a test; it may be gone at HEAD
+    if not _under(left, f.test_roots) or (left not in f.head_ids and not recorded):
         return f"{left} is not a test id of its file at HEAD under a test root"
     if left in f.tree_ids:
         return f"{left} still exists in the committed tree, so the line copies the test and is no rename or drop"
@@ -373,7 +421,7 @@ def _merge_fact(f: Facts, line: CaseMapLine, lefts) -> str:
     if len(lefts) > 1:
         return (f"{line.new} is the right side of {len(lefts)} mapping lines ({', '.join(lefts)}): one right side appears in "
                 f"at most one mapping line; write `{lefts[0]} -> {line.new}` and, for each other left, `<left> {form}`")
-    if line.new in f.head_ids:
+    if line.new in f.head_ids and not (f.record is not None and line.new in f.record.red):  # card MW-134: a right the record holds is the replacement
         return (f"{line.new} already exists at HEAD, so the line merges into an existing test: write "
                 f"`{line.old} {form}`")
     return ""
@@ -410,7 +458,7 @@ def _case_map(f: Facts) -> list:
     asked = [line for line in fresh if line.kind in _COUNTED]
     plain = [line for line in asked if line.raw.strip() in whole]  # a side with a `[case]` suffix is not in `whole`
     counting = [d for d in f.decisions if not _why_not(d)]
-    if asked and not counting:
+    if asked and not counting and not _retiring(f):  # card MW-134: a line that would retire gets the `retire-*` refusals instead
         why = "; ".join(_why_not(d) for d in f.decisions) or (
             "the commit message holds no match of tests.red_proof.decision_pattern (an empty or unusable pattern is no decision)")
         found[CM_NO_DECISION].append(f"{CM_NO_DECISION}: {len(asked)} new mapping or dropped line(s) in case_map.md and no "
@@ -448,6 +496,81 @@ def _case_map(f: Facts) -> list:
     return out
 
 
+def _retiring(f: Facts) -> List[CaseMapLine]:
+    """The new plain mapping and dropped lines of a commit with no code file whose left side the card's red record holds (card
+    MW-134): the lines that would retire a recorded red id. None in a code commit, with no record, or with no case_map staged."""
+    if f.code or f.case_map is None or f.record is None or not f.record.red:
+        return []
+    return [line for line in case_map_new(f.case_map, f.case_map_head)
+            if line.kind in _COUNTED and "[" not in line.old + (line.new or "") and line.old in f.record.red]
+
+
+def _lines_text(lines) -> str:
+    shown = "; ".join(f"line {line.number} `{line.raw.strip()}`" for line in lines[:CASE_MAP_CAP])
+    return shown + (f"; and {len(lines) - CASE_MAP_CAP} more" if len(lines) > CASE_MAP_CAP else "")
+
+
+def _decision_refusals(f: Facts, lines, good) -> list:
+    """The refusals of the decision of a retirement (R347 2 d), one reason id for each way a decision does not anchor it."""
+    what = f"case_map.md would retire {len(lines)} recorded red test(s) of {f.card} ({', '.join(l.old for l in lines[:3])}"
+    what += ", ...)" if len(lines) > 3 else ")"
+    if not f.decisions:
+        return [Refusal(RETIRE_NO_DECISION, f"{RETIRE_NO_DECISION}: {what} and the commit message names no decision (no match of "
+                                            f"tests.red_proof.decision_pattern; an empty or unusable pattern is no decision); a "
+                                            f"retirement is honoured only under a decision of the ledger that another session wrote: "
+                                            f"name one in the commit message")]
+    if not good:
+        out = []
+        for d in f.decisions:
+            if not d.in_ledger:
+                reason, way = RETIRE_NOT_IN_LEDGER, "name a decision that is a row of the ledger"
+            elif d.closed:
+                reason, way = RETIRE_CLOSED, "name a decision that is in force, not withdrawn or superseded"
+            else:
+                reason, way = RETIRE_BY_SELF, "a session cannot retire its own failing test: name a decision that another session wrote"
+            out.append(Refusal(reason, f"{reason}: {what} and {_why_not(d)}; {way}"))
+        return out
+    if not any(d.has_ledger for d in good):
+        return [Refusal(RETIRE_NO_LEDGER, f"{RETIRE_NO_LEDGER}: {what} and the root has no ledger file, so the decision's `by` cannot "
+                                          f"be checked and nothing is retired; add the decision to the ledger (a row that another "
+                                          f"session wrote) and name it in the commit message")]
+    return []
+
+
+def _retire(f: Facts, red_now) -> tuple:
+    """(the retirements, the refusals) of a commit (card MW-134, R347 2, R348): see the module text. `decide` gives the retirements
+    only when no refusal of the commit stands."""
+    lines = _retiring(f)
+    if not lines:
+        return (), []
+    good = [d for d in f.decisions if not _why_not(d)]
+    refusals = _decision_refusals(f, lines, good)
+    if refusals:
+        return (), refusals
+    held = f.record.red
+    failing = [line for line in lines if _file_of(line.old) in f.broken_files]
+    unproven = [line for line in lines if line.kind == "mapping" and line.new not in held and line.new not in red_now]
+    if failing:
+        files = ", ".join(sorted({_file_of(line.old) for line in failing}))
+        refusals.append(Refusal(RETIRE_LEFT_FAILING, f"{RETIRE_LEFT_FAILING}: case_map.md {_lines_text(failing)}: the file of the left "
+                                                     f"side ({files}) fails to collect in the committed tree, so its ids are failing, "
+                                                     f"not absent, and a failing id is never retired by a line; make the file collect "
+                                                     f"first"))
+    if unproven:
+        rights = ", ".join(sorted({line.new for line in unproven}))
+        refusals.append(Refusal(RETIRE_RIGHT_NOT_RED, f"{RETIRE_RIGHT_NOT_RED}: case_map.md {_lines_text(unproven)}: the right side "
+                                                      f"({rights}) was not seen red (it is in no red record of {f.card} and is not "
+                                                      f"red in this commit), so the rename has no proven replacement; write the line "
+                                                      f"to a test that was recorded red, or commit that test failing first, alone"))
+    chosen = next(d for d in good if d.has_ledger)
+    seen, out = set(), []
+    for line in lines:
+        if line.old not in seen:
+            seen.add(line.old)
+            out.append(Retirement(line.old, line.new or DROPPED, chosen.ident, chosen.by))
+    return tuple(out), refusals
+
+
 def decide(f: Facts) -> Verdict:
     """The verdict of one commit; see the module text."""
     if not f.card:
@@ -457,4 +580,6 @@ def decide(f: Facts) -> Verdict:
         _with_code(f, refusals)
         return Verdict(tuple(refusals), pins=tuple(i for i in f.new_ids if _is_pin(i, f)))
     red, pins, checks, missing = _tests_only(f, refusals)
-    return Verdict(tuple(refusals), red, pins, checks, missing)
+    retired, more = _retire(f, red)
+    refusals += more
+    return Verdict(tuple(refusals), red, pins, checks, missing, () if refusals else retired)

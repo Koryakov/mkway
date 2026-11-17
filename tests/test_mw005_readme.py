@@ -50,7 +50,7 @@ def test_the_section_states_the_rules_the_keys_and_every_reason():
     flat = _flat(_section())
     manifest = json.loads((REPO / "engine" / "manifest.json").read_text(encoding="utf-8"))["entries"]
     (entry,) = [e for e in manifest if e["name"] == "commit_tests"]
-    assert len(entry["reason_ids"]) == 16  # changed by MW-056 (E15): the warn `commit-tests-still-red` is the fifth id; MW-072: four red proof ids; MW-090 (T7 decision: R225): five case_map ids; MW-131 (R322): the partial-find warn
+    assert len(entry["reason_ids"]) == 23  # changed by MW-134 (R347, R348): the seven retire ids; MW-056 (E15): the warn `commit-tests-still-red` is the fifth id; MW-072: four red proof ids; MW-090 (T7 decision: R225): five case_map ids; MW-131 (R322): the partial-find warn
     for reason in entry["reason_ids"]:
         assert f"`{reason}`" in flat, reason
     schema = json.loads((REPO / "engine" / "profile.schema.json").read_text(encoding="utf-8"))
