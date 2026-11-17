@@ -93,6 +93,7 @@ keeps this file and the register in step.
 - MW-135: the commit gate's refusal of a red test that exists at HEAD and was green there says so and names the two ways out, not the red-first commit
 - MW-136: the refusal text of card-paths-changed names the routes that work today: restore the recorded Paths, or a new card opened by its orderer
 - MW-134: a recorded red id is retired by a valid case_map line of its card, in a tests-only commit, under a decision of the ledger that another session wrote
+- MW-141: a test's row ages are measured when the test runs, not when its module is imported
 
 ## 0.2.7
 - MW-027: Install: one step to a committed fence

@@ -7,6 +7,7 @@ cap of the ruling). Synthetic roots and session ids only; nothing outside the te
 import datetime
 import json
 import re
+import sys
 import time
 
 import pytest
@@ -28,7 +29,11 @@ import register
 import sessions
 
 CAP_SECONDS = 20.0
-NOW = datetime.datetime.now(datetime.timezone.utc)
+
+
+def now():
+    """The clock of a test's rows: read when a fixture or test runs, never at import (MW-141, MW141-D1)."""
+    return datetime.datetime.now(datetime.timezone.utc)
 
 
 @pytest.fixture(autouse=True)
@@ -285,7 +290,7 @@ def notice_roots(tmp_path_factory):
         root = lead_root(tmp_path_factory.mktemp(name))
         register_lead(root, "lead-a")
         roots[name] = root
-    row = messages.make_row("engine", "lead-a", "notice", "past its Appetite", None, NOW)
+    row = messages.make_row("engine", "lead-a", "notice", "past its Appetite", None, now())
     messages.append_row(state(roots["unacked"]), row)
     messages.append_row(state(roots["acked"]), row)
     leads.ack(state(roots["acked"]), "lead-a", row["id"])
@@ -408,16 +413,16 @@ def test_the_line_mkway_send_prints_is_the_line_the_gate_reads():
     assert messages.PING_PREFIX == core_session.PING_PREFIX
 
 
-@pytest.fixture(scope="module")
-def inboxes(tmp_path_factory):
-    """Rows put in the inboxes of synthetic sessions with chosen ages (minutes): `prompt` for the prompt reminder, `ages`
-    for the Stop reminder."""
-    root = lead_root(tmp_path_factory.mktemp("inboxes"))
+def build_inboxes(base):
+    """Rows put in the inboxes of synthetic sessions with chosen ages (minutes), measured from the moment this runs:
+    `prompt` for the prompt reminder, `ages` for the Stop reminder."""
+    root = lead_root(base)
     register_lead(root, "lead-a")
     put = {}
+    built = now()
 
     def row(to, kind, minutes_old, key, sender="lead-a"):
-        made = messages.make_row(sender, to, kind, f"work {key}", None, NOW - datetime.timedelta(minutes=minutes_old))
+        made = messages.make_row(sender, to, kind, f"work {key}", None, built - datetime.timedelta(minutes=minutes_old))
         messages.append_row(state(root), made)
         put[key] = made["id"]
 
@@ -431,6 +436,11 @@ def inboxes(tmp_path_factory):
     row("oldacked", "order", 45, "old-acked-order")
     leads.ack(state(root), "oldacked", put["old-acked-order"])
     return root, put
+
+
+@pytest.fixture(scope="module")
+def inboxes(tmp_path_factory):
+    return build_inboxes(tmp_path_factory.mktemp("inboxes"))
 
 
 @pytest.mark.parametrize("session, kind", [
@@ -467,6 +477,15 @@ def test_the_stop_reminder_reads_the_age_of_unacked_orders_against_the_profiles_
     root, _put = inboxes
     profile = profile_of(root) if minutes is None else dict(profile_of(root), messaging={"ack_reminder_minutes": minutes})
     assert gate_call(gate_message.stop, root, session=session, event="Stop", profile=profile).kind == kind
+
+
+def test_the_ages_of_the_rows_do_not_depend_on_how_long_ago_the_module_was_imported(tmp_path, monkeypatch):
+    """Catches: MW-141 (MW141-D1): a row age measured from a clock taken at import, so a run that reaches the test 20
+    minutes after collection sees a 45-minute order as 65 minutes old and warns under a 60-minute limit."""
+    monkeypatch.setattr(sys.modules[__name__], "NOW", now() - datetime.timedelta(minutes=20), raising=False)
+    root, _put = build_inboxes(tmp_path)
+    profile = dict(profile_of(root), messaging={"ack_reminder_minutes": 60})
+    assert gate_call(gate_message.stop, root, session="old", event="Stop", profile=profile).kind == "allow"
 
 
 def test_the_stop_reminder_names_the_old_order_and_the_default_age(inboxes):

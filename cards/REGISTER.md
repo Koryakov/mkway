@@ -123,3 +123,4 @@
 | MW-135 | the commit gate's refusal of a red test that exists at HEAD and was green there says so and names the two ways out, not the red-first commit | proposed | `cards/MW-135-red-wayout-text` |
 | MW-136 | the refusal text of card-paths-changed names the routes that work today: restore the recorded Paths, or a new card opened by its orderer | proposed | `cards/MW-136-paths-wayout-text` |
 | MW-134 | a recorded red id is retired by a valid case_map line of its card, in a tests-only commit, under a decision of the ledger that another session wrote | proposed | `cards/MW-134-retire-red-id` |
+| MW-141 | a test's row ages are measured when the test runs, not when its module is imported | proposed | `cards/MW-141-fixture-clock` |
